@@ -1,0 +1,44 @@
+/* Login page specific styles */
+:root {
+  --background: 0 0% 0%;
+  --foreground: 0 0% 100%;
+  
+  --card: 240 10% 3.9%;
+  --card-foreground: 0 0% 98%;
+  
+  --border: 240 3.7% 15.9%;
+  --input: 240 3.7% 15.9%;
+  
+  --primary: 217.2 91.2% 59.8%;
+  --primary-foreground: 210 40% 98%;
+}
+
+body {
+  background-color: black !important;
+  color: white !important;
+}
+
+.bg-background {
+  background-color: black !important;
+}
+
+/* Forcefully override card styles */
+[data-theme] .bg-card,
+.bg-card {
+  background-color: hsl(240, 10%, 3.9%) !important;
+}
+
+[data-theme] .border-card,
+.border-card {
+  border-color: hsl(240, 3.7%, 15.9%) !important;
+}
+
+/* Additional overrides if needed */
+.login-page-container {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: black;
+  color: white;
+} 

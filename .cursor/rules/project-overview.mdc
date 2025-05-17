@@ -1,0 +1,28 @@
+---
+description:
+globs:
+alwaysApply: false
+---
+# SentientEdge Codebase – Navigation Cheat-Sheet
+
+## Front-end (Next.js 15 App Router)
+• Source lives in the [app](mdc:app/) directory.  Each first-level folder is a route segment (e.g. [app/login](mdc:app/login/)).
+• Global HTML shell & providers are composed in [app/layout.tsx](mdc:app/layout.tsx).
+• Shared hooks go under [hooks](mdc:hooks/) – real-time logic is in [hooks/use-realtime.tsx](mdc:hooks/use-realtime.tsx) which consumes the ws helper in [lib/websocket.ts](mdc:lib/websocket.ts).
+
+## Back-end (dev-only API + WS)
+The lightweight Express server that the UI expects during local development is defined in [server.js](mdc:server.js).  It exposes:
+```text
+GET  /api/health     – simple health-check
+WS   /ws             – JSON message bus used by use-realtime hook
+```
+
+## NPM Scripts
+```text
+npm run dev         – starts Next.js on :3000
+npm run dev:backend – starts Express/WS on :3001
+npm run dev:all     – runs both concurrently
+```
+
+## Styling & Tooling
+Tailwind is configured in [tailwind.config.ts](mdc:tailwind.config.ts) and PostCSS in [postcss.config.mjs](mdc:postcss.config.mjs).
