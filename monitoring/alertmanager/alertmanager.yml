@@ -1,0 +1,334 @@
+# AlertManager Configuration for SentientEdge Drone Platform
+# Military-grade alerting and notification system
+
+global:
+  # SMTP configuration for email alerts
+  smtp_smarthost: 'smtp.mil.gov:587'
+  smtp_from: 'sentient-edge-alerts@military.gov'
+  smtp_auth_username: 'sentient-edge'
+  smtp_auth_password: '${SMTP_PASSWORD}'
+  smtp_require_tls: true
+  
+  # Default notification settings
+  resolve_timeout: 5m
+  http_config:
+    follow_redirects: true
+    enable_http2: true
+
+# Templates for alert formatting
+templates:
+  - '/etc/alertmanager/templates/*.tmpl'
+
+# Route configuration - defines how alerts are routed to receivers
+route:
+  group_by: ['alertname', 'cluster', 'service']
+  group_wait: 10s
+  group_interval: 10s
+  repeat_interval: 1h
+  receiver: 'default-receiver'
+  
+  # Child routes for specific alert types
+  routes:
+    # Critical system alerts - immediate notification
+    - match:
+        severity: critical
+      receiver: 'critical-alerts'
+      group_wait: 0s
+      repeat_interval: 15m
+      continue: true
+    
+    # Drone emergency alerts - highest priority
+    - match_re:
+        alertname: '(DroneOffline|DroneBatteryLow|DroneAnomalyDetected)'
+      receiver: 'drone-emergency'
+      group_wait: 0s
+      repeat_interval: 5m
+      continue: true
+    
+    # Security incidents - immediate military response
+    - match_re:
+        category: '(SECURITY|THREAT_DETECTION)'
+      receiver: 'security-incidents'
+      group_wait: 0s
+      repeat_interval: 10m
+      continue: true
+    
+    # Mission critical alerts
+    - match:
+        category: MISSION
+        severity: high
+      receiver: 'mission-control'
+      group_wait: 30s
+      repeat_interval: 30m
+    
+    # Infrastructure alerts
+    - match_re:
+        alertname: '(InstanceDown|HighCPU|HighMemory|DiskSpaceLow)'
+      receiver: 'infrastructure-team'
+      group_wait: 1m
+      repeat_interval: 1h
+    
+    # Network and communication alerts
+    - match:
+        category: NETWORK
+      receiver: 'network-team'
+      group_wait: 2m
+      repeat_interval: 2h
+    
+    # Application performance alerts
+    - match:
+        category: PERFORMANCE
+      receiver: 'dev-team'
+      group_wait: 5m
+      repeat_interval: 4h
+
+# Inhibit rules - suppress certain alerts when others are firing
+inhibit_rules:
+  # Suppress instance alerts if the whole cluster is down
+  - source_match:
+      alertname: 'ClusterDown'
+    target_match:
+      alertname: 'InstanceDown'
+    equal: ['cluster']
+  
+  # Suppress database connection alerts if database is down
+  - source_match:
+      alertname: 'DatabaseDown'
+    target_match:
+      alertname: 'DatabaseConnectionHigh'
+    equal: ['database']
+  
+  # Suppress low battery warnings if drone is offline
+  - source_match:
+      alertname: 'DroneOffline'
+    target_match:
+      alertname: 'DroneBatteryLow'
+    equal: ['drone_id']
+
+# Receivers - define where alerts are sent
+receivers:
+  # Default receiver for unmatched alerts
+  - name: 'default-receiver'
+    email_configs:
+      - to: 'operations@sentientedge.mil'
+        subject: '[SentientEdge] Alert: {{ .GroupLabels.alertname }}'
+        body: |
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Severity: {{ .Labels.severity }}
+          Time: {{ .StartsAt }}
+          {{ end }}
+        html: |
+          <h2>SentientEdge Alert</h2>
+          <table>
+          {{ range .Alerts }}
+          <tr><td>Alert:</td><td>{{ .Annotations.summary }}</td></tr>
+          <tr><td>Description:</td><td>{{ .Annotations.description }}</td></tr>
+          <tr><td>Severity:</td><td>{{ .Labels.severity }}</td></tr>
+          <tr><td>Time:</td><td>{{ .StartsAt }}</td></tr>
+          {{ end }}
+          </table>
+
+  # Critical alerts - multiple notification channels
+  - name: 'critical-alerts'
+    email_configs:
+      - to: 'critical-ops@sentientedge.mil,command@sentientedge.mil'
+        subject: '🚨 [CRITICAL] SentientEdge: {{ .GroupLabels.alertname }}'
+        body: |
+          CRITICAL ALERT - IMMEDIATE ACTION REQUIRED
+          
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Severity: {{ .Labels.severity }}
+          Classification: {{ .Labels.classification | default "UNCLASSIFIED" }}
+          Time: {{ .StartsAt }}
+          {{ end }}
+          
+          Please respond immediately via secure communication channels.
+    
+    # Slack notification for critical alerts
+    slack_configs:
+      - api_url: '${SLACK_WEBHOOK_URL}'
+        channel: '#critical-alerts'
+        title: '🚨 Critical SentientEdge Alert'
+        text: |
+          {{ range .Alerts }}
+          *Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          *Severity:* {{ .Labels.severity }}
+          *Time:* {{ .StartsAt }}
+          {{ end }}
+        color: 'danger'
+    
+    # PagerDuty for critical incidents
+    pagerduty_configs:
+      - service_key: '${PAGERDUTY_SERVICE_KEY}'
+        description: 'Critical SentientEdge Alert: {{ .GroupLabels.alertname }}'
+        severity: 'critical'
+
+  # Drone emergency alerts - highest priority
+  - name: 'drone-emergency'
+    email_configs:
+      - to: 'drone-ops@sentientedge.mil,flight-control@sentientedge.mil'
+        subject: '🚁 [DRONE EMERGENCY] {{ .GroupLabels.alertname }}'
+        body: |
+          DRONE EMERGENCY ALERT
+          Classification: CONFIDENTIAL
+          
+          {{ range .Alerts }}
+          Drone ID: {{ .Labels.drone_id }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Mission ID: {{ .Labels.mission_id | default "N/A" }}
+          Location: {{ .Labels.location | default "Unknown" }}
+          Time: {{ .StartsAt }}
+          {{ end }}
+          
+          Immediate flight control response required.
+    
+    # SMS alerts for drone emergencies
+    webhook_configs:
+      - url: '${SMS_WEBHOOK_URL}'
+        send_resolved: true
+        http_config:
+          basic_auth:
+            username: '${SMS_USERNAME}'
+            password: '${SMS_PASSWORD}'
+        title: 'Drone Emergency'
+        text: |
+          {{ range .Alerts }}
+          DRONE EMERGENCY: {{ .Labels.drone_id }} - {{ .Annotations.summary }}
+          {{ end }}
+
+  # Security incidents - military command notification
+  - name: 'security-incidents'
+    email_configs:
+      - to: 'security@sentientedge.mil,intel@sentientedge.mil'
+        subject: '🛡️ [SECURITY] SentientEdge: {{ .GroupLabels.alertname }}'
+        body: |
+          SECURITY INCIDENT DETECTED
+          Classification: SECRET
+          
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Threat Level: {{ .Labels.threat_level | default "Unknown" }}
+          Source IP: {{ .Labels.source_ip | default "Unknown" }}
+          User: {{ .Labels.user | default "Unknown" }}
+          Time: {{ .StartsAt }}
+          {{ end }}
+          
+          Security team response initiated.
+    
+    # Dedicated security Slack channel
+    slack_configs:
+      - api_url: '${SECURITY_SLACK_WEBHOOK_URL}'
+        channel: '#security-incidents'
+        title: '🛡️ Security Incident'
+        text: |
+          {{ range .Alerts }}
+          *Threat:* {{ .Annotations.summary }}
+          *Details:* {{ .Annotations.description }}
+          *Source:* {{ .Labels.source_ip | default "Unknown" }}
+          *Time:* {{ .StartsAt }}
+          {{ end }}
+        color: 'warning'
+
+  # Mission control alerts
+  - name: 'mission-control'
+    email_configs:
+      - to: 'mission-control@sentientedge.mil'
+        subject: '🎯 [MISSION] SentientEdge: {{ .GroupLabels.alertname }}'
+        body: |
+          MISSION ALERT
+          
+          {{ range .Alerts }}
+          Mission ID: {{ .Labels.mission_id }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Priority: {{ .Labels.priority | default "Normal" }}
+          Threat Level: {{ .Labels.threat_level | default "1" }}
+          Time: {{ .StartsAt }}
+          {{ end }}
+
+  # Infrastructure team alerts
+  - name: 'infrastructure-team'
+    email_configs:
+      - to: 'infrastructure@sentientedge.mil'
+        subject: '[INFRA] SentientEdge: {{ .GroupLabels.alertname }}'
+        body: |
+          Infrastructure Alert
+          
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Instance: {{ .Labels.instance }}
+          Service: {{ .Labels.service }}
+          Time: {{ .StartsAt }}
+          {{ end }}
+
+  # Network team alerts
+  - name: 'network-team'
+    email_configs:
+      - to: 'network@sentientedge.mil'
+        subject: '[NETWORK] SentientEdge: {{ .GroupLabels.alertname }}'
+        body: |
+          Network Alert
+          
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Network: {{ .Labels.network | default "Unknown" }}
+          Time: {{ .StartsAt }}
+          {{ end }}
+
+  # Development team alerts
+  - name: 'dev-team'
+    email_configs:
+      - to: 'dev-team@sentientedge.mil'
+        subject: '[DEV] SentientEdge: {{ .GroupLabels.alertname }}'
+        body: |
+          Application Alert
+          
+          {{ range .Alerts }}
+          Alert: {{ .Annotations.summary }}
+          Description: {{ .Annotations.description }}
+          Service: {{ .Labels.service }}
+          Time: {{ .StartsAt }}
+          {{ end }}
+    
+    slack_configs:
+      - api_url: '${DEV_SLACK_WEBHOOK_URL}'
+        channel: '#dev-alerts'
+        title: 'Development Alert'
+        text: |
+          {{ range .Alerts }}
+          *Service:* {{ .Labels.service }}
+          *Alert:* {{ .Annotations.summary }}
+          *Description:* {{ .Annotations.description }}
+          {{ end }}
+
+# Time intervals for muting alerts during maintenance windows
+time_intervals:
+  - name: 'maintenance-window'
+    time_intervals:
+      - times:
+          - start_time: '02:00'
+            end_time: '04:00'
+        weekdays: ['sunday']
+        months: ['1:12']
+  
+  - name: 'business-hours'
+    time_intervals:
+      - times:
+          - start_time: '09:00'
+            end_time: '17:00'
+        weekdays: ['monday:friday']
+
+# Mute time intervals (when to suppress alerts)
+mute_time_intervals:
+  - name: 'maintenance-mute'
+    time_intervals:
+      - 'maintenance-window'

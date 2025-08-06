@@ -1,0 +1,87 @@
+# Dockerfile for Scalable WebSocket Service
+# Multi-stage build for optimized production deployment
+
+# Build stage
+FROM node:20-alpine AS builder
+
+# Set working directory
+WORKDIR /app
+
+# Install build dependencies
+RUN apk add --no-cache \
+    python3 \
+    make \
+    g++ \
+    git \
+    curl
+
+# Copy package files
+COPY package*.json ./
+
+# Install dependencies with exact versions for security
+RUN npm ci --only=production --no-audit --no-fund
+
+# Copy source code
+COPY . .
+
+# Build if there are any build steps needed
+RUN npm run build 2>/dev/null || echo "No build script found"
+
+# Production stage
+FROM node:20-alpine AS production
+
+# Create non-root user for security
+RUN addgroup -g 1001 -S sentient && \
+    adduser -S sentient -u 1001 -G sentient
+
+# Install runtime dependencies
+RUN apk add --no-cache \
+    curl \
+    ca-certificates \
+    tini \
+    dumb-init
+
+# Set working directory
+WORKDIR /app
+
+# Copy built application from builder stage
+COPY --from=builder --chown=sentient:sentient /app/node_modules ./node_modules
+COPY --from=builder --chown=sentient:sentient /app/package*.json ./
+COPY --chown=sentient:sentient . .
+
+# Create necessary directories
+RUN mkdir -p /app/logs /app/temp /app/ssl && \
+    chown -R sentient:sentient /app
+
+# Set environment variables
+ENV NODE_ENV=production
+ENV PORT=4000
+ENV MAX_WS_CONNECTIONS=2500
+ENV ENABLE_CLUSTERING=true
+ENV LOG_LEVEL=info
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -f http://localhost:${PORT}/health || exit 1
+
+# Expose port
+EXPOSE ${PORT}
+
+# Switch to non-root user
+USER sentient
+
+# Use tini as PID 1 for proper signal handling
+ENTRYPOINT ["/sbin/tini", "--"]
+
+# Start the application
+CMD ["node", "server-scalable.js"]
+
+# Labels for container metadata
+LABEL org.opencontainers.image.title="SentientEdge WebSocket Service"
+LABEL org.opencontainers.image.description="Scalable WebSocket service for military-grade drone operations"
+LABEL org.opencontainers.image.vendor="SentientEdge"
+LABEL org.opencontainers.image.version="2.0.0"
+LABEL org.opencontainers.image.authors="SentientEdge Team"
+LABEL org.opencontainers.image.url="https://sentientedge.ai"
+LABEL org.opencontainers.image.source="https://github.com/sentientedge/websocket-cluster"
+LABEL org.opencontainers.image.licenses="Proprietary"

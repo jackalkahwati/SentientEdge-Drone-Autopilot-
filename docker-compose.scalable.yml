@@ -1,0 +1,516 @@
+# Docker Compose for Scalable WebSocket Infrastructure
+# Military-grade drone communication system with horizontal scaling
+
+version: '3.8'
+
+services:
+  # Redis Cluster for pub/sub and caching
+  redis-master:
+    image: redis:7-alpine
+    container_name: sentient-redis-master
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-master-data:/data
+      - ./config/redis/redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf
+    networks:
+      - sentient-cluster
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  redis-replica-1:
+    image: redis:7-alpine
+    container_name: sentient-redis-replica-1
+    ports:
+      - "6380:6379"
+    volumes:
+      - redis-replica-1-data:/data
+    command: redis-server --replicaof redis-master 6379
+    depends_on:
+      - redis-master
+    networks:
+      - sentient-cluster
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  redis-replica-2:
+    image: redis:7-alpine
+    container_name: sentient-redis-replica-2
+    ports:
+      - "6381:6379"
+    volumes:
+      - redis-replica-2-data:/data
+    command: redis-server --replicaof redis-master 6379
+    depends_on:
+      - redis-master
+    networks:
+      - sentient-cluster
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  # HAProxy Load Balancer
+  haproxy:
+    image: haproxy:2.8-alpine
+    container_name: sentient-haproxy
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8404:8404"  # Stats page
+    volumes:
+      - ./config/haproxy-websocket-lb.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      - ./ssl:/etc/ssl/certs:ro
+    depends_on:
+      - websocket-1
+      - websocket-2
+      - websocket-3
+      - websocket-4
+    networks:
+      - sentient-cluster
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.3'
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "80"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # WebSocket Server Instances
+  websocket-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.websocket
+    container_name: sentient-ws-1
+    ports:
+      - "4000:4000"
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - SERVER_ID=ws-cluster-1
+      - WORKER_ID=0
+      - REDIS_URL=redis://redis-master:6379
+      - REDIS_HOST=redis-master
+      - REDIS_PORT=6379
+      - MAX_WS_CONNECTIONS=2500
+      - ENABLE_CLUSTERING=true
+      - USE_HTTPS=false
+      - DATABASE_URL=postgresql://postgres:sentientedge@postgres:5432/sentientedge
+    volumes:
+      - ./:/app
+      - websocket-1-logs:/app/logs
+    depends_on:
+      - redis-master
+      - postgres
+    networks:
+      - sentient-cluster
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  websocket-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.websocket
+    container_name: sentient-ws-2
+    ports:
+      - "4001:4000"
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - SERVER_ID=ws-cluster-2
+      - WORKER_ID=1
+      - REDIS_URL=redis://redis-master:6379
+      - REDIS_HOST=redis-master
+      - REDIS_PORT=6379
+      - MAX_WS_CONNECTIONS=2500
+      - ENABLE_CLUSTERING=true
+      - USE_HTTPS=false
+      - DATABASE_URL=postgresql://postgres:sentientedge@postgres:5432/sentientedge
+    volumes:
+      - ./:/app
+      - websocket-2-logs:/app/logs
+    depends_on:
+      - redis-master
+      - postgres
+    networks:
+      - sentient-cluster
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  websocket-3:
+    build:
+      context: .
+      dockerfile: Dockerfile.websocket
+    container_name: sentient-ws-3
+    ports:
+      - "4002:4000"
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - SERVER_ID=ws-cluster-3
+      - WORKER_ID=2
+      - REDIS_URL=redis://redis-master:6379
+      - REDIS_HOST=redis-master
+      - REDIS_PORT=6379
+      - MAX_WS_CONNECTIONS=2500
+      - ENABLE_CLUSTERING=true
+      - USE_HTTPS=false
+      - DATABASE_URL=postgresql://postgres:sentientedge@postgres:5432/sentientedge
+    volumes:
+      - ./:/app
+      - websocket-3-logs:/app/logs
+    depends_on:
+      - redis-master
+      - postgres
+    networks:
+      - sentient-cluster
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  websocket-4:
+    build:
+      context: .
+      dockerfile: Dockerfile.websocket
+    container_name: sentient-ws-4
+    ports:
+      - "4003:4000"
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - SERVER_ID=ws-cluster-4
+      - WORKER_ID=3
+      - REDIS_URL=redis://redis-master:6379
+      - REDIS_HOST=redis-master
+      - REDIS_PORT=6379
+      - MAX_WS_CONNECTIONS=2500
+      - ENABLE_CLUSTERING=true
+      - USE_HTTPS=false
+      - DATABASE_URL=postgresql://postgres:sentientedge@postgres:5432/sentientedge
+    volumes:
+      - ./:/app
+      - websocket-4-logs:/app/logs
+    depends_on:
+      - redis-master
+      - postgres
+    networks:
+      - sentient-cluster
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:16-alpine
+    container_name: sentient-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: sentientedge
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: sentientedge
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d
+    networks:
+      - sentient-cluster
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sentientedge"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # PgBouncer Connection Pooling
+  pgbouncer:
+    image: pgbouncer/pgbouncer:latest
+    container_name: sentient-pgbouncer
+    ports:
+      - "6432:5432"
+    environment:
+      DATABASES_HOST: postgres
+      DATABASES_PORT: 5432
+      DATABASES_USER: postgres
+      DATABASES_PASSWORD: sentientedge
+      DATABASES_DBNAME: sentientedge
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 1000
+      DEFAULT_POOL_SIZE: 25
+    depends_on:
+      - postgres
+    networks:
+      - sentient-cluster
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.3'
+
+  # Monitoring Stack
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: sentient-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+    networks:
+      - sentient-cluster
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: sentient-grafana
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: sentientedge
+      GF_USERS_ALLOW_SIGN_UP: false
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    depends_on:
+      - prometheus
+    networks:
+      - sentient-cluster
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.3'
+
+  # Log aggregation
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.1
+    container_name: sentient-elasticsearch
+    environment:
+      - discovery.type=single-node
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - xpack.security.enabled=false
+    ports:
+      - "9200:9200"
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    networks:
+      - sentient-cluster
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1.0'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.1
+    container_name: sentient-kibana
+    ports:
+      - "5601:5601"
+    environment:
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+    depends_on:
+      - elasticsearch
+    networks:
+      - sentient-cluster
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'
+
+  # Auto-scaling controller (custom service)
+  autoscaler:
+    build:
+      context: .
+      dockerfile: Dockerfile.autoscaler
+    container_name: sentient-autoscaler
+    environment:
+      - REDIS_URL=redis://redis-master:6379
+      - MIN_INSTANCES=2
+      - MAX_INSTANCES=8
+      - SCALE_UP_THRESHOLD=0.8
+      - SCALE_DOWN_THRESHOLD=0.3
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./:/app
+    depends_on:
+      - redis-master
+    networks:
+      - sentient-cluster
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: '0.3'
+
+  # Nginx (alternative to HAProxy)
+  nginx:
+    image: nginx:alpine
+    container_name: sentient-nginx
+    ports:
+      - "8080:80"
+      - "8443:443"
+    volumes:
+      - ./config/nginx-websocket-lb.conf:/etc/nginx/conf.d/default.conf
+      - ./ssl:/etc/nginx/ssl
+    depends_on:
+      - websocket-1
+      - websocket-2
+      - websocket-3
+      - websocket-4
+    networks:
+      - sentient-cluster
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+          cpus: '0.2'
+    profiles:
+      - nginx  # Only start with --profile nginx
+
+networks:
+  sentient-cluster:
+    driver: bridge
+    name: sentient-cluster
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  # Redis data
+  redis-master-data:
+    driver: local
+  redis-replica-1-data:
+    driver: local
+  redis-replica-2-data:
+    driver: local
+  
+  # PostgreSQL data
+  postgres-data:
+    driver: local
+  
+  # Application logs
+  websocket-1-logs:
+    driver: local
+  websocket-2-logs:
+    driver: local
+  websocket-3-logs:
+    driver: local
+  websocket-4-logs:
+    driver: local
+  
+  # Monitoring data
+  prometheus-data:
+    driver: local
+  grafana-data:
+    driver: local
+  elasticsearch-data:
+    driver: local
+
+# Health check configuration
+x-healthcheck-defaults: &healthcheck-defaults
+  interval: 30s
+  timeout: 10s
+  retries: 3
+  start_period: 30s
+
+# Resource limit defaults
+x-resource-defaults: &resource-defaults
+  deploy:
+    resources:
+      limits:
+        memory: 512M
+        cpus: '0.5'
+      reservations:
+        memory: 256M
+        cpus: '0.25'

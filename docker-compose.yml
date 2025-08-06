@@ -1,0 +1,163 @@
+version: '3.8'
+
+services:
+  # Primary PostgreSQL Database
+  postgres-primary:
+    image: postgres:16-alpine
+    container_name: sentient-edge-postgres-primary
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sentient_edge
+      POSTGRES_USER: sentient_admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-SecurePostgres123!@#}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+      # Enable SSL/TLS
+      POSTGRES_SSL_MODE: require
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_primary_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d
+      - ./database/ssl:/var/lib/postgresql/ssl
+      - ./database/backups:/backups
+    command: >
+      postgres
+      -c ssl=on
+      -c ssl_cert_file=/var/lib/postgresql/ssl/server.crt
+      -c ssl_key_file=/var/lib/postgresql/ssl/server.key
+      -c ssl_ca_file=/var/lib/postgresql/ssl/ca.crt
+      -c max_connections=200
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c maintenance_work_mem=64MB
+      -c checkpoint_completion_target=0.7
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=4MB
+      -c min_wal_size=1GB
+      -c max_wal_size=4GB
+      -c log_statement=all
+      -c log_min_duration_statement=100
+      -c log_checkpoints=on
+      -c log_connections=on
+      -c log_disconnections=on
+      -c log_lock_waits=on
+      -c log_temp_files=0
+    networks:
+      - sentient-edge-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentient_admin -d sentient_edge"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Read Replica for Scaling
+  postgres-replica:
+    image: postgres:16-alpine
+    container_name: sentient-edge-postgres-replica
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sentient_edge
+      POSTGRES_USER: sentient_admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-SecurePostgres123!@#}
+      PGUSER: sentient_admin
+    ports:
+      - "5433:5432"
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    volumes:
+      - postgres_replica_data:/var/lib/postgresql/data
+      - ./database/ssl:/var/lib/postgresql/ssl
+    command: >
+      bash -c "
+      until pg_basebackup -h postgres-primary -D /var/lib/postgresql/data -U sentient_admin -v -P -W; do
+        echo 'Waiting for primary server...'
+        sleep 1
+      done
+      echo 'standby_mode = on' >> /var/lib/postgresql/data/recovery.conf
+      echo 'primary_conninfo = \"host=postgres-primary port=5432 user=sentient_admin\"' >> /var/lib/postgresql/data/recovery.conf
+      postgres
+      "
+    networks:
+      - sentient-edge-network
+
+  # Redis for Caching and Session Management
+  redis:
+    image: redis:7-alpine
+    container_name: sentient-edge-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./database/redis/redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf
+    networks:
+      - sentient-edge-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # PgBouncer for Connection Pooling
+  pgbouncer:
+    image: pgbouncer/pgbouncer:latest
+    container_name: sentient-edge-pgbouncer
+    restart: unless-stopped
+    environment:
+      DATABASES_HOST: postgres-primary
+      DATABASES_PORT: 5432
+      DATABASES_USER: sentient_admin
+      DATABASES_PASSWORD: ${POSTGRES_PASSWORD:-SecurePostgres123!@#}
+      DATABASES_DBNAME: sentient_edge
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 1000
+      DEFAULT_POOL_SIZE: 20
+      MIN_POOL_SIZE: 5
+      RESERVE_POOL_SIZE: 5
+      MAX_DB_CONNECTIONS: 100
+      AUTH_TYPE: scram-sha-256
+    ports:
+      - "6432:5432"
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    volumes:
+      - ./database/pgbouncer:/etc/pgbouncer
+    networks:
+      - sentient-edge-network
+
+  # Database Monitoring with Prometheus
+  postgres-exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: sentient-edge-postgres-exporter
+    restart: unless-stopped
+    environment:
+      DATA_SOURCE_NAME: "postgresql://sentient_admin:${POSTGRES_PASSWORD:-SecurePostgres123!@#}@postgres-primary:5432/sentient_edge?sslmode=require"
+    ports:
+      - "9187:9187"
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    networks:
+      - sentient-edge-network
+
+volumes:
+  postgres_primary_data:
+    driver: local
+  postgres_replica_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  sentient-edge-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

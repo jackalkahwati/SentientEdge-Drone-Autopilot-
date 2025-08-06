@@ -1,0 +1,48 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: sentient-edge-base
+  annotations:
+    config.kubernetes.io/local-config: "true"
+
+resources:
+- namespace.yaml
+- configmap.yaml
+- secrets.yaml
+- postgres.yaml
+- redis.yaml
+- backend.yaml
+- frontend.yaml
+- nginx.yaml
+
+commonLabels:
+  app.kubernetes.io/name: sentient-edge
+  app.kubernetes.io/part-of: drone-control-platform
+  app.kubernetes.io/managed-by: kustomize
+
+images:
+- name: registry.sentientedge.military/sentient-edge/frontend
+  newTag: latest
+- name: registry.sentientedge.military/sentient-edge/backend
+  newTag: latest
+
+replicas:
+- name: frontend
+  count: 3
+- name: backend
+  count: 3
+- name: nginx
+  count: 2
+
+patchesStrategicMerge:
+- |-
+  apiVersion: v1
+  kind: ConfigMap
+  metadata:
+    name: sentient-edge-config
+    namespace: sentient-edge
+  data:
+    ENVIRONMENT: "base"
+
+namespace: sentient-edge

@@ -16,10 +16,11 @@ interface AuthContextType {
   user: User | null;
   loading: boolean;
   error: string | null;
-  login: (email: string, password: string) => Promise<boolean>;
+  login: (email: string, password: string, mfaCode?: string) => Promise<boolean>;
   logout: () => void;
   register: (userData: RegisterData) => Promise<boolean>;
   isAuthenticated: boolean;
+  requiresMFA: boolean;
 }
 
 interface AuthProviderProps {
@@ -41,6 +42,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
   const [loading, setLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [requiresMFA, setRequiresMFA] = useState<boolean>(false);
   const router = useRouter();
 
   // Check if user is already logged in on initial load
@@ -71,28 +73,58 @@ export function AuthProvider({ children }: AuthProviderProps) {
     checkAuthStatus();
   }, []);
 
-  const login = async (email: string, password: string): Promise<boolean> => {
+  const login = async (email: string, password: string, mfaCode?: string): Promise<boolean> => {
     setLoading(true);
     setError(null);
 
     try {
-      const response = await api.post<AuthResponse>("/auth/login", {
+      const response = await api.post<AuthResponse & { 
+        refreshToken?: string; 
+        expiresIn?: number;
+        code?: string;
+      }>("/auth/login", {
         email,
         password,
+        ...(mfaCode && { mfaCode }),
       });
 
       if (response.error) {
         setError(response.error);
-        toast.error(response.error);
+        
+        // Handle specific error cases
+        if (response.status === 401) {
+          const data = response as any;
+          if (data.code === 'MFA_REQUIRED') {
+            setRequiresMFA(true);
+            toast.error("Please enter your MFA code");
+            setError("MFA code required");
+          } else {
+            toast.error(response.error);
+          }
+        } else {
+          toast.error(response.error);
+        }
+        
         setLoading(false);
         return false;
       }
 
       if (response.data) {
-        const { user, token } = response.data;
+        const { user, token, refreshToken, expiresIn } = response.data;
+        
+        // Store tokens securely
         localStorage.setItem("auth-token", token);
+        if (refreshToken) {
+          localStorage.setItem("refresh-token", refreshToken);
+        }
+        if (expiresIn) {
+          const expirationTime = Date.now() + (expiresIn * 1000);
+          localStorage.setItem("token-expires", expirationTime.toString());
+        }
+        
         setUser(user);
         setIsAuthenticated(true);
+        setRequiresMFA(false); // Reset MFA requirement on successful login
         toast.success("Login successful");
         setLoading(false);
         return true;
@@ -141,7 +173,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
   };
 
   const logout = () => {
+    // Clear all authentication data
     localStorage.removeItem("auth-token");
+    localStorage.removeItem("refresh-token");
+    localStorage.removeItem("token-expires");
+    
     setUser(null);
     setIsAuthenticated(false);
     router.push("/login");
@@ -158,6 +194,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         logout,
         register,
         isAuthenticated,
+        requiresMFA,
       }}
     >
       {children}

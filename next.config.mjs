@@ -16,6 +16,8 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  // Enable standalone output for Docker containerization
+  output: 'standalone',
   // Disable experimental webpack workers, they cause cache rename issues on iCloud paths
   experimental: {},
 }

@@ -1,0 +1,401 @@
+# SentientEdge Service Mesh Configuration
+# Application-specific Istio configuration for drone control platform
+
+# Enable Istio sidecar injection for sentient-edge namespace
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sentient-edge
+  labels:
+    istio-injection: enabled
+    security-level: military-grade
+
+---
+# Virtual Service for traffic routing
+apiVersion: networking.istio.io/v1beta1
+kind: VirtualService
+metadata:
+  name: sentient-edge-routing
+  namespace: sentient-edge
+spec:
+  hosts:
+  - "sentientedge.military"
+  - "api.sentientedge.military"
+  gateways:
+  - istio-system/sentient-edge-gateway
+  http:
+  # Frontend routing
+  - match:
+    - uri:
+        prefix: "/"
+      headers:
+        host:
+          exact: "sentientedge.military"
+    route:
+    - destination:
+        host: frontend-service.sentient-edge.svc.cluster.local
+        port:
+          number: 3000
+      weight: 100
+    fault:
+      delay:
+        percentage:
+          value: 0.1  # 0.1% of requests get delayed for chaos testing
+        fixedDelay: 5s
+    timeout: 30s
+    retries:
+      attempts: 3
+      perTryTimeout: 10s
+  
+  # API routing with advanced traffic management
+  - match:
+    - uri:
+        prefix: "/api"
+      headers:
+        host:
+          exact: "api.sentientedge.military"
+    route:
+    - destination:
+        host: backend-service.sentient-edge.svc.cluster.local
+        port:
+          number: 4000
+        subset: stable
+      weight: 90
+    - destination:
+        host: backend-service.sentient-edge.svc.cluster.local
+        port:
+          number: 4000
+        subset: canary
+      weight: 10
+    fault:
+      abort:
+        percentage:
+          value: 0.01  # 0.01% of requests get aborted for resilience testing
+        httpStatus: 500
+    timeout: 60s
+    retries:
+      attempts: 5
+      perTryTimeout: 15s
+      retryOn: 5xx,reset,connect-failure,refused-stream
+  
+  # WebSocket routing
+  - match:
+    - uri:
+        prefix: "/ws"
+      headers:
+        host:
+          exact: "api.sentientedge.military"
+        upgrade:
+          exact: "websocket"
+    route:
+    - destination:
+        host: backend-service.sentient-edge.svc.cluster.local
+        port:
+          number: 4000
+    timeout: 0s  # No timeout for WebSocket connections
+
+---
+# Destination Rules with traffic policies
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: backend-destination-rule
+  namespace: sentient-edge
+spec:
+  host: backend-service.sentient-edge.svc.cluster.local
+  trafficPolicy:
+    # Load balancing
+    loadBalancer:
+      consistentHash:
+        httpHeaderName: "x-session-id"  # Session affinity for drone control
+    
+    # Connection pool settings
+    connectionPool:
+      tcp:
+        maxConnections: 100
+        connectTimeout: 30s
+        keepAliveTime: 7200s
+      http:
+        http1MaxPendingRequests: 64
+        http2MaxRequests: 1000
+        maxRequestsPerConnection: 10
+        maxRetries: 5
+        idleTimeout: 60s
+        h2UpgradePolicy: UPGRADE
+    
+    # Circuit breaker
+    outlierDetection:
+      consecutiveGatewayErrors: 3
+      consecutive5xxErrors: 3
+      interval: 30s
+      baseEjectionTime: 30s
+      maxEjectionPercent: 50
+      minHealthPercent: 30
+    
+    # Security - mTLS
+    tls:
+      mode: ISTIO_MUTUAL
+  
+  # Subsets for canary deployments
+  subsets:
+  - name: stable
+    labels:
+      version: stable
+    trafficPolicy:
+      connectionPool:
+        tcp:
+          maxConnections: 200
+  - name: canary
+    labels:
+      version: canary
+    trafficPolicy:
+      connectionPool:
+        tcp:
+          maxConnections: 50
+
+---
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: frontend-destination-rule
+  namespace: sentient-edge
+spec:
+  host: frontend-service.sentient-edge.svc.cluster.local
+  trafficPolicy:
+    loadBalancer:
+      simple: LEAST_CONN
+    connectionPool:
+      tcp:
+        maxConnections: 50
+        connectTimeout: 10s
+      http:
+        http1MaxPendingRequests: 32
+        maxRequestsPerConnection: 5
+        idleTimeout: 30s
+    outlierDetection:
+      consecutiveGatewayErrors: 2
+      consecutive5xxErrors: 2
+      interval: 30s
+      baseEjectionTime: 30s
+    tls:
+      mode: ISTIO_MUTUAL
+
+---
+# Authorization Policies - Fine-grained access control
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: frontend-access-policy
+  namespace: sentient-edge
+spec:
+  selector:
+    matchLabels:
+      app: sentient-edge
+      component: frontend
+  rules:
+  # Allow all authenticated users to access frontend
+  - from:
+    - source:
+        principals: ["cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account"]
+  # Allow backend to communicate with frontend for SSR
+  - from:
+    - source:
+        principals: ["cluster.local/ns/sentient-edge/sa/backend-service-account"]
+
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: backend-api-access-policy
+  namespace: sentient-edge
+spec:
+  selector:
+    matchLabels:
+      app: sentient-edge
+      component: backend
+  rules:
+  # Allow ingress gateway to access API
+  - from:
+    - source:
+        principals: ["cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account"]
+    to:
+    - operation:
+        methods: ["GET", "POST", "PUT", "PATCH", "DELETE"]
+        paths: ["/api/*"]
+  
+  # Allow WebSocket connections
+  - from:
+    - source:
+        principals: ["cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account"]
+    to:
+    - operation:
+        methods: ["GET"]
+        paths: ["/ws"]
+    when:
+    - key: request.headers[upgrade]
+      values: ["websocket"]
+
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: database-access-policy
+  namespace: sentient-edge
+spec:
+  selector:
+    matchLabels:
+      app: sentient-edge
+      component: postgres
+  rules:
+  # Only backend can access database
+  - from:
+    - source:
+        principals: ["cluster.local/ns/sentient-edge/sa/backend-service-account"]
+    to:
+    - operation:
+        ports: ["5432"]
+
+---
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: redis-access-policy
+  namespace: sentient-edge
+spec:
+  selector:
+    matchLabels:
+      app: sentient-edge
+      component: redis
+  rules:
+  # Only backend can access Redis
+  - from:
+    - source:
+        principals: ["cluster.local/ns/sentient-edge/sa/backend-service-account"]
+    to:
+    - operation:
+        ports: ["6379"]
+
+---
+# Service Entry for external dependencies
+apiVersion: networking.istio.io/v1beta1
+kind: ServiceEntry
+metadata:
+  name: external-apis
+  namespace: sentient-edge
+spec:
+  hosts:
+  - external-drone-api.military.gov
+  - weather-api.noaa.gov
+  - maps-api.military.gov
+  ports:
+  - number: 443
+    name: https
+    protocol: HTTPS
+  location: MESH_EXTERNAL
+  resolution: DNS
+
+---
+# Request Authentication - JWT validation
+apiVersion: security.istio.io/v1beta1
+kind: RequestAuthentication
+metadata:
+  name: jwt-authentication
+  namespace: sentient-edge
+spec:
+  selector:
+    matchLabels:
+      app: sentient-edge
+      component: backend
+  jwtRules:
+  - issuer: "https://auth.sentientedge.military"
+    jwksUri: "https://auth.sentientedge.military/.well-known/jwks.json"
+    audiences:
+    - "sentient-edge-api"
+    forwardOriginalToken: true
+
+---
+# Telemetry configuration
+apiVersion: telemetry.istio.io/v1alpha1
+kind: Telemetry
+metadata:
+  name: sentient-edge-telemetry
+  namespace: sentient-edge
+spec:
+  metrics:
+  - providers:
+    - name: prometheus
+  - overrides:
+    - match:
+        metric: ALL_METRICS
+      tagOverrides:
+        request_protocol:
+          operation: UPSERT
+          value: "%{REQUEST_PROTOCOL}"
+        source_app:
+          operation: UPSERT
+          value: "%{SOURCE_APP | 'unknown'}"
+        destination_service_name:
+          operation: UPSERT
+          value: "%{DESTINATION_SERVICE_NAME | 'unknown'}"
+  tracing:
+  - providers:
+    - name: jaeger
+  accessLogging:
+  - providers:
+    - name: otel
+
+---
+# Fault injection for chaos engineering
+apiVersion: networking.istio.io/v1beta1
+kind: EnvoyFilter
+metadata:
+  name: chaos-engineering-filter
+  namespace: sentient-edge
+spec:
+  workloadSelector:
+    labels:
+      app: sentient-edge
+      chaos-enabled: "true"
+  configPatches:
+  - applyTo: HTTP_FILTER
+    match:
+      context: SIDECAR_INBOUND
+      listener:
+        filterChain:
+          filter:
+            name: "envoy.filters.network.http_connection_manager"
+    patch:
+      operation: INSERT_BEFORE
+      value:
+        name: envoy.filters.http.fault
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.http.fault.v3.HTTPFault
+          delay:
+            percentage:
+              numerator: 1
+              denominator: THOUSAND
+            fixed_delay: 1s
+          abort:
+            percentage:
+              numerator: 1
+              denominator: TEN_THOUSAND
+            http_status: 503
+
+---
+# Sidecar configuration for resource optimization
+apiVersion: networking.istio.io/v1beta1
+kind: Sidecar
+metadata:
+  name: sentient-edge-sidecar
+  namespace: sentient-edge
+spec:
+  workloadSelector:
+    labels:
+      app: sentient-edge
+  egress:
+  - hosts:
+    - "./*"  # Allow all services in same namespace
+    - "istio-system/*"  # Allow Istio system services
+    - "external-drone-api.military.gov"
+    - "weather-api.noaa.gov"
+    - "maps-api.military.gov"

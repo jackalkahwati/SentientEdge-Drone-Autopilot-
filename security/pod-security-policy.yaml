@@ -1,0 +1,423 @@
+# Pod Security Standards and Policies for Military-Grade Security
+# Implements NIST 800-53 and DISA STIG requirements
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sentient-edge
+  labels:
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+    security-level: military-grade
+    classification: unclassified-fouo
+
+---
+# Pod Security Policy (Legacy - for older clusters)
+apiVersion: policy/v1beta1
+kind: PodSecurityPolicy
+metadata:
+  name: sentient-edge-restricted
+  annotations:
+    seccomp.security.alpha.kubernetes.io/allowedProfileNames: 'runtime/default'
+    seccomp.security.alpha.kubernetes.io/defaultProfileName: 'runtime/default'
+    apparmor.security.beta.kubernetes.io/allowedProfileNames: 'runtime/default'
+    apparmor.security.beta.kubernetes.io/defaultProfileName: 'runtime/default'
+spec:
+  # Privilege escalation
+  privileged: false
+  allowPrivilegeEscalation: false
+  
+  # Security contexts
+  runAsUser:
+    rule: 'MustRunAsNonRoot'
+  runAsGroup:
+    rule: 'MustRunAs'
+    ranges:
+    - min: 1000
+      max: 65535
+  fsGroup:
+    rule: 'RunAsAny'
+  
+  # Capabilities
+  requiredDropCapabilities:
+    - ALL
+  allowedCapabilities: []
+  defaultAddCapabilities: []
+  
+  # Volumes
+  volumes:
+    - 'configMap'
+    - 'emptyDir'
+    - 'projected'
+    - 'secret'
+    - 'downwardAPI'
+    - 'persistentVolumeClaim'
+  
+  # Filesystem
+  readOnlyRootFilesystem: true
+  
+  # Network
+  hostNetwork: false
+  hostIPC: false
+  hostPID: false
+  hostPorts: []
+  
+  # SELinux
+  seLinux:
+    rule: 'RunAsAny'
+
+---
+# Network Security Policy
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sentient-edge-network-policy
+  namespace: sentient-edge
+spec:
+  podSelector:
+    matchLabels:
+      app: sentient-edge
+  policyTypes:
+  - Ingress
+  - Egress
+  
+  ingress:
+  # Allow ingress from istio-system (ingress gateway)
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: istio-system
+    ports:
+    - protocol: TCP
+      port: 3000  # Frontend
+    - protocol: TCP
+      port: 4000  # Backend
+  
+  # Allow internal communication within namespace
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: sentient-edge
+    ports:
+    - protocol: TCP
+      port: 3000
+    - protocol: TCP
+      port: 4000
+    - protocol: TCP
+      port: 5432  # PostgreSQL
+    - protocol: TCP
+      port: 6379  # Redis
+  
+  # Allow monitoring from monitoring namespace
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    ports:
+    - protocol: TCP
+      port: 9090  # Metrics
+
+  egress:
+  # Allow DNS resolution
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  
+  # Allow internal communication
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          name: sentient-edge
+    ports:
+    - protocol: TCP
+      port: 3000
+    - protocol: TCP
+      port: 4000
+    - protocol: TCP
+      port: 5432
+    - protocol: TCP
+      port: 6379
+  
+  # Allow external HTTPS for APIs
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+  
+  # Allow Kubernetes API
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 6443
+
+---
+# Security Context Constraints (OpenShift equivalent)
+apiVersion: security.openshift.io/v1
+kind: SecurityContextConstraints
+metadata:
+  name: sentient-edge-scc
+  annotations:
+    kubernetes.io/description: "Military-grade security constraints for SentientEdge"
+allowHostDirVolumePlugin: false
+allowHostIPC: false
+allowHostNetwork: false
+allowHostPID: false
+allowHostPorts: false
+allowPrivileged: false
+allowPrivilegeEscalation: false
+allowedCapabilities: []
+defaultAddCapabilities: []
+requiredDropCapabilities:
+- ALL
+fsGroup:
+  type: RunAsAny
+readOnlyRootFilesystem: true
+runAsUser:
+  type: MustRunAsNonRoot
+seLinuxContext:
+  type: MustRunAs
+volumes:
+- configMap
+- downwardAPI
+- emptyDir
+- persistentVolumeClaim
+- projected
+- secret
+
+---
+# OPA Gatekeeper Constraint Template
+apiVersion: templates.gatekeeper.sh/v1beta1
+kind: ConstraintTemplate
+metadata:
+  name: requiresecuritycontext
+spec:
+  crd:
+    spec:
+      names:
+        kind: RequireSecurityContext
+      validation:
+        openAPIV3Schema:
+          type: object
+  targets:
+    - target: admission.k8s.gatekeeper.sh
+      rego: |
+        package requiresecuritycontext
+        
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not container.securityContext.runAsNonRoot
+          msg := "Container must run as non-root user"
+        }
+        
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          not container.securityContext.readOnlyRootFilesystem
+          msg := "Container must have read-only root filesystem"
+        }
+        
+        violation[{"msg": msg}] {
+          container := input.review.object.spec.containers[_]
+          container.securityContext.allowPrivilegeEscalation != false
+          msg := "Container must not allow privilege escalation"
+        }
+
+---
+# Require Security Context Constraint
+apiVersion: constraints.gatekeeper.sh/v1beta1
+kind: RequireSecurityContext
+metadata:
+  name: must-have-security-context
+spec:
+  match:
+    kinds:
+      - apiGroups: [""]
+        kinds: ["Pod"]
+    namespaces: ["sentient-edge"]
+  parameters: {}
+
+---
+# Falco Security Runtime Rules
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: falco-rules
+  namespace: sentient-edge
+  labels:
+    app: falco
+data:
+  falco_rules.yaml: |
+    # SentientEdge Military Security Rules
+    
+    - rule: Unauthorized Process in Container
+      desc: Detect unauthorized processes in SentientEdge containers
+      condition: >
+        spawned_process and 
+        container and 
+        k8s.ns.name="sentient-edge" and
+        not proc.name in (node, npm, sh, bash)
+      output: >
+        Unauthorized process in SentientEdge container 
+        (user=%user.name command=%proc.cmdline container=%container.name)
+      priority: WARNING
+    
+    - rule: Suspicious Network Activity
+      desc: Detect suspicious network connections from SentientEdge pods
+      condition: >
+        outgoing_connection and 
+        k8s.ns.name="sentient-edge" and
+        not fd.rip in (postgres-service, redis-service) and
+        not fd.rport in (443, 53, 80)
+      output: >
+        Suspicious network connection from SentientEdge 
+        (connection=%fd.name user=%user.name container=%container.name)
+      priority: WARNING
+    
+    - rule: File System Modification
+      desc: Detect unauthorized file system modifications
+      condition: >
+        open_write and 
+        k8s.ns.name="sentient-edge" and
+        not fd.name startswith "/tmp" and
+        not fd.name startswith "/var/log"
+      output: >
+        Unauthorized file modification in SentientEdge 
+        (file=%fd.name user=%user.name container=%container.name)
+      priority: ERROR
+    
+    - rule: Privilege Escalation Attempt
+      desc: Detect privilege escalation attempts
+      condition: >
+        spawned_process and 
+        k8s.ns.name="sentient-edge" and
+        proc.name in (sudo, su, setuid)
+      output: >
+        Privilege escalation attempt in SentientEdge 
+        (command=%proc.cmdline user=%user.name container=%container.name)
+      priority: CRITICAL
+
+---
+# RBAC for Security Monitoring
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: sentient-edge
+  name: security-monitor
+rules:
+- apiGroups: [""]
+  resources: ["pods", "pods/log", "events"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments", "replicasets"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["security.istio.io"]
+  resources: ["peerauthentications", "authorizationpolicies"]
+  verbs: ["get", "list", "watch"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: security-monitor-binding
+  namespace: sentient-edge
+subjects:
+- kind: ServiceAccount
+  name: security-monitor
+  namespace: monitoring
+roleRef:
+  kind: Role
+  name: security-monitor
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# Service Account for Security Monitoring
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: security-monitor
+  namespace: monitoring
+  labels:
+    app: security-monitor
+automountServiceAccountToken: true
+
+---
+# CIS Kubernetes Benchmark Compliance
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cis-benchmark-config
+  namespace: sentient-edge
+data:
+  cis-compliance.yaml: |
+    # CIS Kubernetes Benchmark v1.7.0 compliance settings
+    
+    # 5.1.1 Ensure that the cluster-admin role is only used where required
+    # 5.1.3 Minimize wildcard use in Roles and ClusterRoles
+    # 5.2.2 Pod Security Policies are enabled
+    # 5.3.2 Ensure that all Namespaces have Network Policies defined
+    # 5.7.3 Apply Security Context to Your Pods and Containers
+    # 5.7.4 The default namespace should not be used
+    
+    compliance_checks:
+      - name: "pod_security_context"
+        enabled: true
+        enforce: true
+      - name: "network_policies"
+        enabled: true
+        enforce: true
+      - name: "rbac_restrictions"
+        enabled: true
+        enforce: true
+      - name: "resource_quotas"
+        enabled: true
+        enforce: true
+
+---
+# Resource Quotas for Security
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: security-resource-quota
+  namespace: sentient-edge
+spec:
+  hard:
+    requests.cpu: "20"
+    requests.memory: 40Gi
+    limits.cpu: "40"
+    limits.memory: 80Gi
+    pods: "50"
+    persistentvolumeclaims: "10"
+    services: "20"
+    secrets: "50"
+    configmaps: "50"
+
+---
+# Limit Ranges for Pod Security
+apiVersion: v1
+kind: LimitRange
+metadata:
+  name: security-limit-range
+  namespace: sentient-edge
+spec:
+  limits:
+  - default:
+      cpu: "500m"
+      memory: "512Mi"
+    defaultRequest:
+      cpu: "100m"
+      memory: "128Mi"
+    max:
+      cpu: "2"
+      memory: "4Gi"
+    min:
+      cpu: "50m"
+      memory: "64Mi"
+    type: Container
+  - max:
+      storage: "10Gi"
+    min:
+      storage: "1Gi"
+    type: PersistentVolumeClaim

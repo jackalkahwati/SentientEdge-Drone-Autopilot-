@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(find:*)",
+      "Bash(npm install:*)",
+      "Bash(touch:*)",
+      "Bash(cp:*)",
+      "Bash(npm run dev:backend:*)",
+      "Bash(node server.js)",
+      "Bash(timeout:*)",
+      "Bash(node:*)",
+      "Bash(DEBUG=*)",
+      "Bash(mkdir:*)",
+      "Bash(chmod:*)",
+      "Bash(openssl rand:*)",
+      "Bash(vercel:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": []
+  }
+}

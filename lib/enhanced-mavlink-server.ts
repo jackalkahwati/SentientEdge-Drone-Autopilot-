@@ -1,10 +1,13 @@
 // Enhanced MAVLink Server with Mesh Networking and Multiple Radio Support
 // Addresses John's concerns about radio limitations and distributed communication
+// Integrated with ArduCopter-specific message handling
 
 import WebSocket from 'ws';
 import dgram from 'dgram';
 import { createServer } from 'http';
 import { EventEmitter } from 'events';
+import { copterMAVLinkHandler, CopterMAVLinkMessageID } from './arducopter-mavlink-handlers';
+import { ArduCopterIntegration } from './arducopter-integration';
 
 // Enhanced MAVLink message structure
 interface MAVLinkMessage {
@@ -59,15 +62,19 @@ class EnhancedMAVLinkServer extends EventEmitter {
   private meshNodes: Map<number, MeshNode> = new Map();
   private messageQueue: Map<string, MAVLinkMessage[]> = new Map();
   private routingTable: Map<number, { nextHop: number; distance: number }> = new Map();
+  private arduCopterIntegration: ArduCopterIntegration;
 
   constructor(websocketPort: number) {
     super();
+    
+    // Initialize ArduCopter integration
+    this.arduCopterIntegration = ArduCopterIntegration.getInstance();
     
     // Set up WebSocket server for web clients
     const server = createServer();
     this.wss = new WebSocket.Server({ server });
     server.listen(websocketPort, () => {
-      console.log(`Enhanced MAVLink server listening on port ${websocketPort}`);
+      console.log(`Enhanced MAVLink server with ArduCopter integration listening on port ${websocketPort}`);
     });
     
     this.initialize();
@@ -525,16 +532,41 @@ class EnhancedMAVLinkServer extends EventEmitter {
   }
 
   private processDroneMessage(message: MAVLinkMessage): void {
-    // Process specific message types
+    // Forward to ArduCopter-specific handler first
+    copterMAVLinkHandler.handleMessage(message.id, message.sysid, message.compid, message.payload);
+    
+    // Process specific message types for server functionality
     switch (message.id) {
-      case 0: // HEARTBEAT
+      case CopterMAVLinkMessageID.HEARTBEAT:
         this.handleHeartbeat(message);
         break;
-      case 33: // GLOBAL_POSITION_INT
+      case CopterMAVLinkMessageID.GLOBAL_POSITION_INT:
         this.handlePositionUpdate(message);
+        break;
+      case CopterMAVLinkMessageID.SYS_STATUS:
+        this.handleSystemStatus(message);
+        break;
+      case CopterMAVLinkMessageID.PARAM_VALUE:
+        this.handleParameterValue(message);
+        break;
+      case CopterMAVLinkMessageID.MISSION_CURRENT:
+        this.handleMissionCurrent(message);
+        break;
+      case CopterMAVLinkMessageID.STATUSTEXT:
+        this.handleStatusText(message);
         break;
       // Add more message handlers as needed
     }
+    
+    // Broadcast to all connected web clients
+    this.broadcastToClients('mavlink_message', {
+      messageId: message.id,
+      systemId: message.sysid,
+      componentId: message.compid,
+      payload: message.payload,
+      timestamp: message.timestamp,
+      sourceRadio: message.sourceRadio,
+    });
   }
 
   private handleHeartbeat(message: MAVLinkMessage): void {
@@ -554,6 +586,51 @@ class EnhancedMAVLinkServer extends EventEmitter {
         alt: message.payload.alt / 1000
       };
     }
+  }
+
+  private handleSystemStatus(message: MAVLinkMessage): void {
+    // System status updates are handled by the ArduCopter integration
+    // Additional server-side processing can be added here
+  }
+
+  private handleParameterValue(message: MAVLinkMessage): void {
+    // Parameter updates are handled by the ArduCopter integration
+    // Log parameter changes for audit purposes
+    console.log(`Parameter update from system ${message.sysid}: ${message.payload.param_id} = ${message.payload.param_value}`);
+  }
+
+  private handleMissionCurrent(message: MAVLinkMessage): void {
+    // Mission progress updates
+    this.broadcastToClients('mission_progress', {
+      systemId: message.sysid,
+      currentWaypoint: message.payload.seq,
+      timestamp: message.timestamp,
+    });
+  }
+
+  private handleStatusText(message: MAVLinkMessage): void {
+    // Status text messages from ArduCopter
+    this.broadcastToClients('status_message', {
+      systemId: message.sysid,
+      severity: message.payload.severity,
+      text: message.payload.text,
+      timestamp: message.timestamp,
+    });
+  }
+
+  // Broadcast message to all connected web clients
+  private broadcastToClients(event: string, data: any): void {
+    const message = JSON.stringify({ event, data });
+    this.clients.forEach(client => {
+      if (client.readyState === WebSocket.OPEN) {
+        try {
+          client.send(message);
+        } catch (error) {
+          console.error('Failed to send message to client:', error);
+          this.clients.delete(client);
+        }
+      }
+    });
   }
 
   private queueMessage(droneId: number, message: MAVLinkMessage): void {

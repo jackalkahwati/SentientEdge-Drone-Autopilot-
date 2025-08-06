@@ -1,0 +1,177 @@
+# Filebeat Configuration for SentientEdge Drone Platform
+# Collects and ships logs to Logstash for processing
+
+# Global configuration
+name: sentient-edge-filebeat
+tags: ["sentient-edge", "drone-platform", "military"]
+
+# Filebeat inputs
+filebeat.inputs:
+  # Main application logs
+  - type: log
+    enabled: true
+    paths:
+      - /var/log/sentient-edge/*.log
+    json.keys_under_root: true
+    json.add_error_key: true
+    fields:
+      log_source: "application"
+      service: "sentient-edge"
+    fields_under_root: true
+    multiline.pattern: '^\{'
+    multiline.negate: true
+    multiline.match: after
+    close_inactive: 5m
+    scan_frequency: 1s
+
+  # Audit logs
+  - type: log
+    enabled: true
+    paths:
+      - /var/log/sentient-edge/audit/*.log
+    json.keys_under_root: true
+    json.add_error_key: true
+    fields:
+      log_source: "audit"
+      service: "sentient-edge"
+      log_type: "audit"
+    fields_under_root: true
+    close_inactive: 1m
+    scan_frequency: 1s
+
+  # Security logs
+  - type: log
+    enabled: true
+    paths:
+      - /var/log/sentient-edge/security/*.log
+    json.keys_under_root: true
+    json.add_error_key: true
+    fields:
+      log_source: "security"
+      service: "sentient-edge"
+      log_type: "security"
+      classification: "CONFIDENTIAL"
+    fields_under_root: true
+    close_inactive: 1m
+    scan_frequency: 1s
+
+  # Metrics logs
+  - type: log
+    enabled: true
+    paths:
+      - /var/log/sentient-edge/metrics/*.log
+    json.keys_under_root: true
+    json.add_error_key: true
+    fields:
+      log_source: "metrics"
+      service: "sentient-edge"
+      log_type: "metrics"
+    fields_under_root: true
+    close_inactive: 5m
+    scan_frequency: 5s
+
+  # Docker container logs
+  - type: container
+    enabled: true
+    paths:
+      - /var/lib/docker/containers/*/*.log
+    containers.ids:
+      - "*"
+    containers.path: "/var/lib/docker/containers"
+    containers.stream: "all"
+    json.keys_under_root: true
+    fields:
+      log_source: "docker"
+    fields_under_root: true
+
+# Filebeat modules
+filebeat.config.modules:
+  path: ${path.config}/modules.d/*.yml
+  reload.enabled: true
+  reload.period: 10s
+
+# Processors for log enrichment
+processors:
+  # Add host information
+  - add_host_metadata:
+      when.not.contains.tags: forwarded
+      
+  # Add Docker metadata
+  - add_docker_metadata:
+      host: "unix:///var/run/docker.sock"
+      
+  # Add Kubernetes metadata if applicable
+  - add_kubernetes_metadata:
+      host: ${NODE_NAME}
+      matchers:
+        - logs_path:
+            logs_path: "/var/log/containers/"
+
+  # Drop empty events
+  - drop_event:
+      when:
+        equals:
+          message: ""
+
+  # Add timestamp processing
+  - timestamp:
+      field: "@timestamp"
+      layouts:
+        - '2006-01-02T15:04:05.000Z'
+        - '2006-01-02 15:04:05.000'
+      test:
+        - '2023-01-01T12:00:00.000Z'
+
+# Output configuration - send to Logstash
+output.logstash:
+  hosts: ["logstash:5044"]
+  compression_level: 3
+  bulk_max_size: 2048
+  template.name: "sentient-edge"
+  template.pattern: "sentient-*"
+  
+  # Load balancing
+  loadbalance: true
+  
+  # Connection settings
+  timeout: 30s
+  max_retries: 3
+  backoff.init: 1s
+  backoff.max: 60s
+
+# Alternative: Direct output to Elasticsearch (commented out)
+# output.elasticsearch:
+#   hosts: ["elasticsearch:9200"]
+#   username: "elastic"
+#   password: "${ELASTIC_PASSWORD}"
+#   index: "filebeat-sentient-%{+yyyy.MM.dd}"
+
+# Logging configuration
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /var/log/filebeat
+  name: filebeat
+  keepfiles: 7
+  permissions: 0644
+
+# Monitoring
+monitoring.enabled: true
+monitoring.elasticsearch:
+  hosts: ["elasticsearch:9200"]
+  username: "elastic"
+  password: "${ELASTIC_PASSWORD}"
+
+# Performance tuning
+queue.mem:
+  events: 4096
+  flush.min_events: 512
+  flush.timeout: 5s
+
+# Security settings
+ssl.verification_mode: none
+
+# HTTP endpoint for health checks
+http.enabled: true
+http.host: 0.0.0.0
+http.port: 5066

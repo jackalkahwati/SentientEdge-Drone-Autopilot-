@@ -1,0 +1,58 @@
+# Elasticsearch Configuration for SentientEdge Drone Platform
+# Military-grade security and performance optimizations
+
+cluster.name: sentient-edge-cluster
+node.name: sentient-edge-elasticsearch
+
+# Network settings
+network.host: 0.0.0.0
+http.port: 9200
+transport.port: 9300
+
+# Discovery settings for single-node cluster
+discovery.type: single-node
+
+# Memory settings
+bootstrap.memory_lock: true
+
+# Security settings
+xpack.security.enabled: true
+xpack.security.http.ssl.enabled: false
+xpack.security.transport.ssl.enabled: false
+
+# Monitoring
+xpack.monitoring.collection.enabled: true
+
+# Index settings for military operations
+action.auto_create_index: "+logstash-*,+filebeat-*,+metricbeat-*,+apm-*,+sentient-*,-*"
+
+# Performance optimizations for time-series data
+index.number_of_shards: 1
+index.number_of_replicas: 0
+index.refresh_interval: 5s
+
+# Index lifecycle management for log retention
+xpack.ilm.enabled: true
+
+# Cluster settings
+cluster.routing.allocation.disk.watermark.low: 85%
+cluster.routing.allocation.disk.watermark.high: 90%
+cluster.routing.allocation.disk.watermark.flood_stage: 95%
+
+# Thread pool settings for high-throughput logging
+thread_pool:
+  write:
+    size: 8
+    queue_size: 1000
+  search:
+    size: 8
+    queue_size: 1000
+
+# Circuit breaker settings
+indices.breaker.total.limit: 70%
+indices.breaker.fielddata.limit: 40%
+indices.breaker.request.limit: 40%
+
+# Logging level
+logger.level: INFO
+logger.org.elasticsearch: WARN

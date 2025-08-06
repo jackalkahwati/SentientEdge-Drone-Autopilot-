@@ -1,0 +1,465 @@
+name: SentientEdge CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop, release/* ]
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment Environment'
+        required: true
+        default: 'staging'
+        type: choice
+        options:
+        - development
+        - staging
+        - production
+      skip_tests:
+        description: 'Skip tests (emergency deployment)'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  REGISTRY: registry.sentientedge.military
+  IMAGE_NAME_FRONTEND: sentient-edge/frontend
+  IMAGE_NAME_BACKEND: sentient-edge/backend
+  DOCKER_BUILDKIT: 1
+  COMPOSE_DOCKER_CLI_BUILD: 1
+
+jobs:
+  # Security and Quality Checks
+  security-scan:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.skip_tests }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+    - name: Run Snyk security scan
+      uses: snyk/actions/node@master
+      env:
+        SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+      with:
+        args: --severity-threshold=high
+
+    - name: Run OWASP Dependency Check
+      uses: dependency-check/Dependency-Check_Action@main
+      with:
+        project: 'SentientEdge'
+        path: '.'
+        format: 'JSON'
+        args: >
+          --enableRetired
+          --enableExperimental
+          --failOnCVSS 7
+
+  # Code Quality and Linting
+  code-quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.skip_tests }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Run ESLint
+      run: npm run lint
+
+    - name: Run TypeScript compiler
+      run: npx tsc --noEmit
+
+    - name: Run Prettier check
+      run: npx prettier --check .
+
+    - name: Run Security audit
+      run: npm audit --audit-level moderate
+
+  # Unit and Integration Tests
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    if: ${{ !inputs.skip_tests }}
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: sentient_edge_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      redis:
+        image: redis:7-alpine
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 6379:6379
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+        cache: 'npm'
+
+    - name: Install dependencies
+      run: npm ci
+
+    - name: Run unit tests
+      run: npm test
+      env:
+        NODE_ENV: test
+        DATABASE_URL: postgresql://postgres:test_password@localhost:5432/sentient_edge_test
+        REDIS_URL: redis://localhost:6379
+
+    - name: Run integration tests
+      run: npm run test:integration
+      env:
+        NODE_ENV: test
+        DATABASE_URL: postgresql://postgres:test_password@localhost:5432/sentient_edge_test
+        REDIS_URL: redis://localhost:6379
+
+    - name: Generate test coverage
+      run: npm run test:coverage
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v3
+      with:
+        token: ${{ secrets.CODECOV_TOKEN }}
+        file: ./coverage/lcov.info
+
+  # Build Docker Images
+  build:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    needs: [security-scan, code-quality, test]
+    if: always() && (needs.security-scan.result == 'success' || inputs.skip_tests) && (needs.code-quality.result == 'success' || inputs.skip_tests) && (needs.test.result == 'success' || inputs.skip_tests)
+    outputs:
+      frontend-image: ${{ steps.meta-frontend.outputs.tags }}
+      backend-image: ${{ steps.meta-backend.outputs.tags }}
+      frontend-digest: ${{ steps.build-frontend.outputs.digest }}
+      backend-digest: ${{ steps.build-backend.outputs.digest }}
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+      with:
+        driver-opts: |
+          network=host
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ secrets.REGISTRY_USERNAME }}
+        password: ${{ secrets.REGISTRY_PASSWORD }}
+
+    - name: Extract metadata for frontend
+      id: meta-frontend
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_FRONTEND }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+          type=raw,value=stable,enable=${{ github.ref == 'refs/heads/main' }}
+
+    - name: Extract metadata for backend
+      id: meta-backend
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME_BACKEND }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=sha,prefix={{branch}}-
+          type=raw,value=latest,enable={{is_default_branch}}
+          type=raw,value=stable,enable=${{ github.ref == 'refs/heads/main' }}
+
+    - name: Build and push frontend image
+      id: build-frontend
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile.frontend
+        push: true
+        tags: ${{ steps.meta-frontend.outputs.tags }}
+        labels: ${{ steps.meta-frontend.outputs.labels }}
+        platforms: linux/amd64,linux/arm64
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          NODE_ENV=production
+
+    - name: Build and push backend image
+      id: build-backend
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: ./Dockerfile.backend
+        push: true
+        tags: ${{ steps.meta-backend.outputs.tags }}
+        labels: ${{ steps.meta-backend.outputs.labels }}
+        platforms: linux/amd64,linux/arm64
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        build-args: |
+          NODE_ENV=production
+
+    - name: Sign container images
+      env:
+        COSIGN_PRIVATE_KEY: ${{ secrets.COSIGN_PRIVATE_KEY }}
+        COSIGN_PASSWORD: ${{ secrets.COSIGN_PASSWORD }}
+      run: |
+        echo "$COSIGN_PRIVATE_KEY" | cosign sign --key - ${{ steps.meta-frontend.outputs.tags }}@${{ steps.build-frontend.outputs.digest }}
+        echo "$COSIGN_PRIVATE_KEY" | cosign sign --key - ${{ steps.meta-backend.outputs.tags }}@${{ steps.build-backend.outputs.digest }}
+
+  # Deploy to Development
+  deploy-development:
+    name: Deploy to Development
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/develop' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'development')
+    environment:
+      name: development
+      url: https://dev.sentientedge.military
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+
+    - name: Setup Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.12.0'
+
+    - name: Configure kubectl
+      run: |
+        mkdir -p ~/.kube
+        echo "${{ secrets.KUBECONFIG_DEV }}" | base64 -d > ~/.kube/config
+        chmod 600 ~/.kube/config
+
+    - name: Deploy with Helm
+      run: |
+        helm upgrade --install sentient-edge-dev ./helm/sentient-edge \
+          --namespace sentient-edge-dev \
+          --create-namespace \
+          --values ./helm/sentient-edge/values.yaml \
+          --values ./helm/sentient-edge/values-development.yaml \
+          --set frontend.image.tag="${{ needs.build.outputs.frontend-image }}" \
+          --set backend.image.tag="${{ needs.build.outputs.backend-image }}" \
+          --set environment="development" \
+          --wait --timeout=10m
+
+    - name: Run smoke tests
+      run: |
+        ./scripts/smoke-tests.sh development
+
+  # Deploy to Staging
+  deploy-staging:
+    name: Deploy to Staging
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'staging')
+    environment:
+      name: staging
+      url: https://staging.sentientedge.military
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+
+    - name: Setup Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.12.0'
+
+    - name: Configure kubectl
+      run: |
+        mkdir -p ~/.kube
+        echo "${{ secrets.KUBECONFIG_STAGING }}" | base64 -d > ~/.kube/config
+        chmod 600 ~/.kube/config
+
+    - name: Deploy with Helm (Blue-Green)
+      run: |
+        # Deploy to blue environment first
+        helm upgrade --install sentient-edge-blue ./helm/sentient-edge \
+          --namespace sentient-edge-staging \
+          --create-namespace \
+          --values ./helm/sentient-edge/values.yaml \
+          --values ./helm/sentient-edge/values-staging.yaml \
+          --set frontend.image.tag="${{ needs.build.outputs.frontend-image }}" \
+          --set backend.image.tag="${{ needs.build.outputs.backend-image }}" \
+          --set environment="staging" \
+          --set namePrefix="blue-" \
+          --wait --timeout=15m
+
+    - name: Run comprehensive tests
+      run: |
+        ./scripts/comprehensive-tests.sh staging blue
+
+    - name: Switch traffic to blue (Blue-Green deployment)
+      run: |
+        kubectl patch service sentient-edge-staging-nginx-service -n sentient-edge-staging \
+          -p '{"spec":{"selector":{"deployment":"blue"}}}'
+
+    - name: Cleanup old green deployment
+      run: |
+        helm uninstall sentient-edge-green -n sentient-edge-staging || true
+
+  # Deploy to Production
+  deploy-production:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: [build, deploy-staging]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.environment == 'production')
+    environment:
+      name: production
+      url: https://sentientedge.military
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup kubectl
+      uses: azure/setup-kubectl@v3
+      with:
+        version: 'v1.28.0'
+
+    - name: Setup Helm
+      uses: azure/setup-helm@v3
+      with:
+        version: '3.12.0'
+
+    - name: Configure kubectl for production
+      run: |
+        mkdir -p ~/.kube
+        echo "${{ secrets.KUBECONFIG_PROD }}" | base64 -d > ~/.kube/config
+        chmod 600 ~/.kube/config
+
+    - name: Pre-deployment security check
+      run: |
+        # Verify image signatures
+        cosign verify --key cosign.pub ${{ needs.build.outputs.frontend-image }}@${{ needs.build.outputs.frontend-digest }}
+        cosign verify --key cosign.pub ${{ needs.build.outputs.backend-image }}@${{ needs.build.outputs.backend-digest }}
+
+    - name: Create production backup
+      run: |
+        kubectl create job --from=cronjob/postgres-backup backup-pre-deploy-$(date +%s) -n sentient-edge-prod
+
+    - name: Deploy to production with canary strategy
+      run: |
+        # Deploy canary version (10% traffic)
+        helm upgrade --install sentient-edge-canary ./helm/sentient-edge \
+          --namespace sentient-edge-prod \
+          --create-namespace \
+          --values ./helm/sentient-edge/values.yaml \
+          --values ./helm/sentient-edge/values-production.yaml \
+          --set frontend.image.tag="${{ needs.build.outputs.frontend-image }}" \
+          --set backend.image.tag="${{ needs.build.outputs.backend-image }}" \
+          --set environment="production" \
+          --set namePrefix="canary-" \
+          --set replicaCount=1 \
+          --wait --timeout=20m
+
+    - name: Run canary tests
+      run: |
+        ./scripts/canary-tests.sh production
+
+    - name: Full production deployment
+      run: |
+        # Deploy full production version
+        helm upgrade --install sentient-edge-prod ./helm/sentient-edge \
+          --namespace sentient-edge-prod \
+          --values ./helm/sentient-edge/values.yaml \
+          --values ./helm/sentient-edge/values-production.yaml \
+          --set frontend.image.tag="${{ needs.build.outputs.frontend-image }}" \
+          --set backend.image.tag="${{ needs.build.outputs.backend-image }}" \
+          --set environment="production" \
+          --wait --timeout=30m
+
+    - name: Post-deployment verification
+      run: |
+        ./scripts/production-verification.sh
+
+    - name: Cleanup canary deployment
+      run: |
+        helm uninstall sentient-edge-canary -n sentient-edge-prod || true
+
+  # Notification
+  notify:
+    name: Notification
+    runs-on: ubuntu-latest
+    needs: [deploy-development, deploy-staging, deploy-production]
+    if: always()
+    steps:
+    - name: Notify Teams
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        channel: '#deployments'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+        fields: repo,message,commit,author,action,eventName,ref,workflow
+
+    - name: Update deployment dashboard
+      run: |
+        curl -X POST "${{ secrets.DASHBOARD_WEBHOOK }}" \
+          -H "Content-Type: application/json" \
+          -d '{
+            "deployment": "sentient-edge",
+            "environment": "${{ github.ref }}",
+            "status": "${{ job.status }}",
+            "commit": "${{ github.sha }}",
+            "timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'"
+          }'

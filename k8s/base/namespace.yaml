@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: sentient-edge
+  labels:
+    name: sentient-edge
+    tier: drone-control
+    security-level: military-grade
+  annotations:
+    description: "SentientEdge Drone Control Platform - Military-Grade Security"
+    classification: "UNCLASSIFIED//FOR OFFICIAL USE ONLY"

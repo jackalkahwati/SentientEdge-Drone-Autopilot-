@@ -1,0 +1,99 @@
+# Kibana Configuration for SentientEdge Drone Platform
+# Military-grade data visualization and exploration
+
+# Server configuration
+server.name: sentient-edge-kibana
+server.host: "0.0.0.0"
+server.port: 5601
+server.basePath: ""
+server.rewriteBasePath: false
+
+# Elasticsearch configuration
+elasticsearch.hosts: ["http://elasticsearch:9200"]
+elasticsearch.username: "elastic"
+elasticsearch.password: "${ELASTICSEARCH_PASSWORD}"
+elasticsearch.requestTimeout: 90000
+elasticsearch.shardTimeout: 30000
+
+# Security configuration
+xpack.security.enabled: true
+xpack.security.encryptionKey: "${KIBANA_ENCRYPTION_KEY}"
+xpack.security.session.idleTimeout: "8h"
+xpack.security.session.lifespan: "24h"
+
+# SSL configuration (if using HTTPS)
+# server.ssl.enabled: true
+# server.ssl.certificate: /usr/share/kibana/config/certs/kibana.crt
+# server.ssl.key: /usr/share/kibana/config/certs/kibana.key
+
+# Monitoring
+monitoring.enabled: true
+monitoring.kibana.collection.enabled: true
+monitoring.kibana.collection.interval: 10000
+
+# Performance optimization
+elasticsearch.requestHeadersWhitelist: ["authorization", "x-forwarded-for", "x-forwarded-proto", "x-proxy-user", "x-proxy-roles"]
+
+# Logging
+logging.dest: stdout
+logging.silent: false
+logging.quiet: false
+logging.verbose: false
+
+# Advanced settings for military operations
+map.includeElasticMapsService: true
+map.tilemap.url: "https://tiles.elastic.co/v2/default/{z}/{x}/{y}.png?elastic_tile_service_tos=agree&my_app_name=kibana"
+
+# Data retention and cleanup
+xpack.monitoring.collection.enabled: true
+
+# Dashboard and visualization settings
+kibana.index: ".kibana"
+kibana.defaultAppId: "dashboard"
+
+# Advanced security features
+xpack.security.audit.enabled: true
+xpack.security.audit.appender.type: "file"
+xpack.security.audit.appender.fileName: "/usr/share/kibana/logs/audit.log"
+xpack.security.audit.appender.layout.type: "json"
+
+# Machine learning features (if licensed)
+xpack.ml.enabled: true
+
+# Alerting features
+xpack.alerting.enabled: true
+xpack.actions.enabled: true
+
+# Reporting features
+xpack.reporting.enabled: true
+xpack.reporting.kibanaServer.hostname: "localhost"
+xpack.reporting.kibanaServer.port: 5601
+
+# Canvas for military briefings
+xpack.canvas.enabled: true
+
+# Graph exploration for threat analysis  
+xpack.graph.enabled: true
+
+# APM integration
+xpack.apm.enabled: true
+xpack.apm.ui.enabled: true
+
+# Index pattern management
+# Default index patterns will be created programmatically
+xpack.security.loginAssistanceMessage: "SentientEdge Military Drone Platform - Authorized Personnel Only"
+
+# Custom branding (optional)
+# server.customResponseHeaders: 
+#   "X-Frame-Options": "DENY"
+#   "X-Content-Type-Options": "nosniff"
+
+# Telemetry (disable for security)
+telemetry.enabled: false
+telemetry.optIn: false
+
+# News feed (disable for security)
+newsfeed.enabled: false
+
+# Sample data (disable for production)
+# home.disableWelcomeScreen: true

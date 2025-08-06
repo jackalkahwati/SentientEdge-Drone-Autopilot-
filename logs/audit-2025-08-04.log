@@ -1,0 +1,2 @@
+{"id":"audit_1754330120003_v2qm4u8ac","timestamp":"2025-08-04T17:55:20.003Z","action":"LOGIN_FAILED","userId":"admin-001","resource":"/auth/login","details":{"reason":"Invalid password","loginAttempts":1},"ipAddress":"::1","userAgent":"curl/8.7.1","severity":"high","success":false}
+{"id":"audit_1754330250944_7dvdj0zww","timestamp":"2025-08-04T17:57:30.944Z","action":"LOGIN_SUCCESS","userId":"admin-001","username":"admin","resource":"/auth/login","details":{"lastLogin":"2025-08-04T17:57:30.942Z"},"ipAddress":"::1","severity":"medium","success":true}

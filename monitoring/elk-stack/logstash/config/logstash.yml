@@ -1,0 +1,37 @@
+# Logstash Configuration for SentientEdge Drone Platform
+# Military-grade log processing pipeline
+
+node.name: sentient-edge-logstash
+path.data: /usr/share/logstash/data
+path.logs: /usr/share/logstash/logs
+
+# Pipeline settings
+pipeline.workers: 4
+pipeline.batch.size: 2000
+pipeline.batch.delay: 50
+
+# Memory and performance settings
+pipeline.unsafe_shutdown: false
+path.queue: /usr/share/logstash/data/queue
+
+# HTTP API settings
+http.host: "0.0.0.0"
+http.port: 9600
+
+# X-Pack monitoring
+xpack.monitoring.enabled: true
+xpack.monitoring.elasticsearch.hosts: ["http://elasticsearch:9200"]
+xpack.monitoring.elasticsearch.username: "elastic"
+xpack.monitoring.elasticsearch.password: "${ELASTIC_PASSWORD}"
+
+# Logging
+log.level: info
+log.format: json
+
+# Dead letter queue
+dead_letter_queue.enable: true
+dead_letter_queue.max_bytes: 1gb
+
+# Config reload
+config.reload.automatic: true
+config.reload.interval: 3s

@@ -1,0 +1,256 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: sentient-edge
+  labels:
+    app: sentient-edge
+    component: backend
+    tier: api
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app: sentient-edge
+      component: backend
+  template:
+    metadata:
+      labels:
+        app: sentient-edge
+        component: backend
+        tier: api
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "4000"
+        prometheus.io/path: "/metrics"
+    spec:
+      imagePullSecrets:
+      - name: registry-secret
+      securityContext:
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        runAsNonRoot: true
+      containers:
+      - name: backend
+        image: registry.sentientedge.military/sentient-edge/backend:latest
+        imagePullPolicy: Always
+        env:
+        - name: NODE_ENV
+          valueFrom:
+            configMapKeyRef:
+              name: sentient-edge-config
+              key: NODE_ENV
+        - name: PORT
+          valueFrom:
+            configMapKeyRef:
+              name: sentient-edge-config
+              key: PORT
+        - name: USE_HTTPS
+          valueFrom:
+            configMapKeyRef:
+              name: sentient-edge-config
+              key: USE_HTTPS
+        - name: DATABASE_URL
+          value: "postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(DATABASE_HOST):$(DATABASE_PORT)/$(POSTGRES_DB)"
+        - name: POSTGRES_USER
+          valueFrom:
+            configMapKeyRef:
+              name: sentient-edge-config
+              key: POSTGRES_USER
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: sentient-edge-secrets
+              key: POSTGRES_PASSWORD
+        - name: DATABASE_HOST
+          valueFrom:
+            configMapKeyRef:
+              name: sentient-edge-config
+              key: DATABASE_HOST
+        - name: DATABASE_PORT
+          valueFrom:
+            configMapKeyRef:
+              name: sentient-edge-config
+              key: DATABASE_PORT
+        - name: POSTGRES_DB
+          valueFrom:
+            configMapKeyRef:
+              name: sentient-edge-config
+              key: POSTGRES_DB
+        - name: REDIS_URL
+          value: "redis://redis-service:6379"
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: sentient-edge-secrets
+              key: JWT_SECRET
+        - name: JWT_REFRESH_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: sentient-edge-secrets
+              key: JWT_REFRESH_SECRET
+        - name: ENCRYPTION_KEY
+          valueFrom:
+            secretKeyRef:
+              name: sentient-edge-secrets
+              key: ENCRYPTION_KEY
+        - name: SSL_CERT_PATH
+          value: "/app/ssl/tls.crt"
+        - name: SSL_KEY_PATH
+          value: "/app/ssl/tls.key"
+        - name: SSL_CA_PATH
+          value: "/app/ssl/ca.crt"
+        ports:
+        - containerPort: 4000
+          name: http
+          protocol: TCP
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "1000m"
+          limits:
+            memory: "2Gi"
+            cpu: "2000m"
+        volumeMounts:
+        - name: ssl-certs
+          mountPath: /app/ssl
+          readOnly: true
+        - name: logs
+          mountPath: /app/logs
+        livenessProbe:
+          httpGet:
+            path: /api/health
+            port: 4000
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /api/health
+            port: 4000
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          successThreshold: 1
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /api/health
+            port: 4000
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 10
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+      volumes:
+      - name: ssl-certs
+        secret:
+          secretName: ssl-certificates
+      - name: logs
+        emptyDir: {}
+      restartPolicy: Always
+      dnsPolicy: ClusterFirst
+      terminationGracePeriodSeconds: 30
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-service
+  namespace: sentient-edge
+  labels:
+    app: sentient-edge
+    component: backend
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "4000"
+spec:
+  selector:
+    app: sentient-edge
+    component: backend
+  ports:
+  - name: http
+    port: 4000
+    targetPort: 4000
+    protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend-hpa
+  namespace: sentient-edge
+  labels:
+    app: sentient-edge
+    component: backend
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 15
+      - type: Pods
+        value: 4
+        periodSeconds: 15
+      selectPolicy: Max
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend-pdb
+  namespace: sentient-edge
+  labels:
+    app: sentient-edge
+    component: backend
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: sentient-edge
+      component: backend

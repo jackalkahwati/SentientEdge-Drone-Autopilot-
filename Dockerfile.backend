@@ -1,0 +1,105 @@
+# Multi-stage build for Express backend with military-grade security
+
+# Base image with specific Node.js version for security consistency
+FROM node:20-alpine3.18 AS base
+
+# Install security updates and required packages
+RUN apk update && apk upgrade && \
+    apk add --no-cache \
+    dumb-init \
+    curl \
+    openssl \
+    ca-certificates \
+    && rm -rf /var/cache/apk/*
+
+# Create non-root user for security
+RUN addgroup -g 1001 -S nodeapp && \
+    adduser -S backend -u 1001 -G nodeapp
+
+# Set working directory
+WORKDIR /app
+
+# Install dependencies stage
+FROM base AS deps
+
+# Copy package files
+COPY package.json package-lock.json* pnpm-lock.yaml* ./
+
+# Install all dependencies (including dev dependencies for build tools)
+RUN \
+  if [ -f pnpm-lock.yaml ]; then \
+    npm install -g pnpm && pnpm install --frozen-lockfile; \
+  elif [ -f package-lock.json ]; then \
+    npm ci; \
+  else \
+    npm install; \
+  fi
+
+# Production dependencies stage
+FROM base AS prod-deps
+
+# Copy package files
+COPY package.json package-lock.json* pnpm-lock.yaml* ./
+
+# Install only production dependencies
+RUN \
+  if [ -f pnpm-lock.yaml ]; then \
+    npm install -g pnpm && pnpm install --frozen-lockfile --production; \
+  elif [ -f package-lock.json ]; then \
+    npm ci --only=production; \
+  else \
+    npm install --only=production; \
+  fi
+
+# Build stage (if needed for any build processes)
+FROM base AS builder
+
+WORKDIR /app
+
+# Copy all dependencies
+COPY --from=deps /app/node_modules ./node_modules
+
+# Copy source code
+COPY . .
+
+# Production runtime stage
+FROM base AS runner
+
+WORKDIR /app
+
+ENV NODE_ENV production
+
+# Copy production dependencies
+COPY --from=prod-deps /app/node_modules ./node_modules
+
+# Copy application source code
+COPY --chown=backend:nodeapp server.js ./
+COPY --chown=backend:nodeapp lib/ ./lib/
+COPY --chown=backend:nodeapp database/ ./database/
+
+# Create necessary directories with proper permissions
+RUN mkdir -p /app/logs && \
+    mkdir -p /app/uploads && \
+    mkdir -p /app/ssl && \
+    chown -R backend:nodeapp /app
+
+# Security: Set proper file permissions
+RUN chmod -R 755 /app && \
+    chmod -R 644 /app/lib/*.js && \
+    chmod +x /app/server.js
+
+# Switch to non-root user
+USER backend
+
+# Expose port
+EXPOSE 4000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
+  CMD curl -f http://localhost:4000/api/health || exit 1
+
+# Use dumb-init to handle signals properly
+ENTRYPOINT ["dumb-init", "--"]
+
+# Start the backend server
+CMD ["node", "server.js"]

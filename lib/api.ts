@@ -27,6 +27,14 @@ async function fetchApi<T>(
       defaultHeaders['Authorization'] = `Bearer ${token}`;
     }
 
+    // Add correlation ID for security tracking
+    const correlationId = typeof window !== 'undefined' 
+      ? `client-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+      : undefined;
+    if (correlationId) {
+      defaultHeaders['X-Correlation-ID'] = correlationId;
+    }
+
     const response = await fetch(url, {
       ...options,
       headers: {

@@ -1,0 +1,327 @@
+# Prometheus Alerting Rules for SentientEdge Drone Platform
+# Military-grade alerting rules for mission-critical operations
+
+groups:
+  # System Health Alerts
+  - name: system-health
+    interval: 15s
+    rules:
+      - alert: InstanceDown
+        expr: up == 0
+        for: 1m
+        labels:
+          severity: critical
+          category: SYSTEM
+          classification: CONFIDENTIAL
+        annotations:
+          summary: "Instance {{ $labels.instance }} is down"
+          description: "Instance {{ $labels.instance }} of job {{ $labels.job }} has been down for more than 1 minute."
+          runbook_url: "https://runbooks.sentientedge.mil/instance-down"
+
+      - alert: HighCPUUsage
+        expr: (100 - (avg by(instance) (irate(sentient_cpu_usage_percent[5m])) * 100)) < 10
+        for: 5m
+        labels:
+          severity: warning
+          category: PERFORMANCE
+        annotations:
+          summary: "High CPU usage on {{ $labels.instance }}"
+          description: "CPU usage is above 90% for more than 5 minutes on {{ $labels.instance }}."
+
+      - alert: HighMemoryUsage
+        expr: (sentient_memory_usage_bytes{type="heapUsed"} / sentient_memory_usage_bytes{type="heapTotal"}) * 100 > 90
+        for: 5m
+        labels:
+          severity: warning
+          category: PERFORMANCE
+        annotations:
+          summary: "High memory usage on {{ $labels.instance }}"
+          description: "Memory usage is above 90% for more than 5 minutes on {{ $labels.instance }}."
+
+      - alert: HighErrorRate
+        expr: rate(sentient_http_requests_total{status_code=~"5.."}[5m]) / rate(sentient_http_requests_total[5m]) * 100 > 5
+        for: 2m
+        labels:
+          severity: critical
+          category: API
+        annotations:
+          summary: "High error rate detected"
+          description: "Error rate is above 5% for more than 2 minutes."
+
+  # Drone Operation Alerts
+  - name: drone-operations
+    interval: 10s
+    rules:
+      - alert: DroneOffline
+        expr: sentient_drones_active_total{status="offline"} > 0
+        for: 30s
+        labels:
+          severity: critical
+          category: DRONE_TELEMETRY
+          classification: SECRET
+        annotations:
+          summary: "Drone {{ $labels.drone_id }} is offline"
+          description: "Drone {{ $labels.drone_id }} has been offline for more than 30 seconds during active mission."
+          runbook_url: "https://runbooks.sentientedge.mil/drone-offline"
+
+      - alert: DroneBatteryLow
+        expr: sentient_drone_battery_level_percent < 20
+        for: 1m
+        labels:
+          severity: warning
+          category: DRONE_TELEMETRY
+        annotations:
+          summary: "Low battery on drone {{ $labels.drone_id }}"
+          description: "Drone {{ $labels.drone_id }} battery level is {{ $value }}%, below 20% threshold."
+
+      - alert: DroneBatteryCritical
+        expr: sentient_drone_battery_level_percent < 10
+        for: 0s
+        labels:
+          severity: critical
+          category: DRONE_TELEMETRY
+          classification: CONFIDENTIAL
+        annotations:
+          summary: "Critical battery level on drone {{ $labels.drone_id }}"
+          description: "Drone {{ $labels.drone_id }} battery level is {{ $value }}%, immediate return-to-base required."
+
+      - alert: DroneSignalWeak
+        expr: sentient_drone_signal_strength_dbm > -80
+        for: 2m
+        labels:
+          severity: warning
+          category: COMMUNICATION
+        annotations:
+          summary: "Weak signal from drone {{ $labels.drone_id }}"
+          description: "Signal strength from drone {{ $labels.drone_id }} is {{ $value }} dBm, indicating communication issues."
+
+      - alert: DroneSignalLost
+        expr: sentient_drone_signal_strength_dbm > -60
+        for: 30s
+        labels:
+          severity: critical
+          category: COMMUNICATION
+          classification: CONFIDENTIAL
+        annotations:
+          summary: "Signal lost from drone {{ $labels.drone_id }}"
+          description: "Critical signal loss from drone {{ $labels.drone_id }}, potential loss of control."
+
+      - alert: DroneTelemetryMissing
+        expr: rate(sentient_drone_telemetry_received_total[5m]) == 0
+        for: 1m
+        labels:
+          severity: warning
+          category: DRONE_TELEMETRY
+        annotations:
+          summary: "No telemetry from drone {{ $labels.drone_id }}"
+          description: "No telemetry data received from drone {{ $labels.drone_id }} for more than 1 minute."
+
+      - alert: DroneAnomalyDetected
+        expr: rate(sentient_drone_anomalies_total[5m]) > 0
+        for: 0s
+        labels:
+          severity: high
+          category: ANOMALY
+          classification: CONFIDENTIAL
+        annotations:
+          summary: "Anomaly detected on drone {{ $labels.drone_id }}"
+          description: "Anomaly of type {{ $labels.anomaly_type }} detected on drone {{ $labels.drone_id }}."
+
+  # Security Alerts
+  - name: security
+    interval: 5s
+    rules:
+      - alert: UnauthorizedAccess
+        expr: rate(sentient_authentication_failures_total[5m]) > 0.1
+        for: 1m
+        labels:
+          severity: critical
+          category: SECURITY
+          classification: SECRET
+        annotations:
+          summary: "High authentication failure rate"
+          description: "Authentication failure rate is {{ $value }} failures/second, indicating potential attack."
+
+      - alert: SuspiciousActivity
+        expr: rate(sentient_security_events_total{severity="high"}[5m]) > 0
+        for: 0s
+        labels:
+          severity: critical
+          category: SECURITY
+          classification: SECRET
+        annotations:
+          summary: "Suspicious security activity detected"
+          description: "High-severity security event detected: {{ $labels.event_type }}."
+
+      - alert: ThreatDetected
+        expr: rate(sentient_threats_detected_total[1m]) > 0
+        for: 0s
+        labels:
+          severity: critical
+          category: THREAT_DETECTION
+          classification: TOP_SECRET
+        annotations:
+          summary: "Security threat detected"
+          description: "{{ $labels.threat_type }} threat detected from {{ $labels.source }}."
+
+      - alert: MultipleFailedLogins
+        expr: increase(sentient_authentication_failures_total[10m]) > 5
+        for: 0s
+        labels:
+          severity: warning
+          category: SECURITY
+        annotations:
+          summary: "Multiple failed login attempts"
+          description: "{{ $value }} failed login attempts in the last 10 minutes."
+
+  # Mission Management Alerts
+  - name: mission-management
+    interval: 30s
+    rules:
+      - alert: MissionTimeout
+        expr: sentient_mission_duration_seconds > 14400  # 4 hours
+        for: 1m
+        labels:
+          severity: warning
+          category: MISSION
+        annotations:
+          summary: "Mission {{ $labels.mission_id }} running overtime"
+          description: "Mission {{ $labels.mission_id }} has been running for {{ $value }} seconds, exceeding normal duration."
+
+      - alert: MissionFailure
+        expr: sentient_mission_success_rate < 0.8
+        for: 5m
+        labels:
+          severity: high
+          category: MISSION
+        annotations:
+          summary: "Low mission success rate"
+          description: "Mission success rate has dropped to {{ $value | humanizePercentage }}."
+
+      - alert: HighThreatLevel
+        expr: sentient_mission_threat_level > 4
+        for: 0s
+        labels:
+          severity: critical
+          category: MISSION
+          classification: SECRET
+        annotations:
+          summary: "High threat level mission active"
+          description: "Mission with threat level {{ $value }} is currently active, enhanced monitoring required."
+
+  # Communication Protocol Alerts
+  - name: communication-protocols
+    interval: 15s
+    rules:
+      - alert: MAVLinkErrors
+        expr: rate(sentient_mavlink_errors_total[5m]) > 0.01
+        for: 2m
+        labels:
+          severity: warning
+          category: MAVLINK
+        annotations:
+          summary: "MAVLink communication errors on drone {{ $labels.drone_id }}"
+          description: "MAVLink error rate is {{ $value }} errors/second for drone {{ $labels.drone_id }}."
+
+      - alert: CyphalErrors
+        expr: rate(sentient_cyphal_errors_total[5m]) > 0.01
+        for: 2m
+        labels:
+          severity: warning
+          category: CYPHAL
+        annotations:
+          summary: "Cyphal communication errors on node {{ $labels.node_id }}"
+          description: "Cyphal error rate is {{ $value }} errors/second for node {{ $labels.node_id }}."
+
+      - alert: ProtocolTimeout
+        expr: rate(sentient_mavlink_messages_total[5m]) == 0 or rate(sentient_cyphal_messages_total[5m]) == 0
+        for: 1m
+        labels:
+          severity: warning
+          category: COMMUNICATION
+        annotations:
+          summary: "Communication protocol timeout"
+          description: "No messages received via communication protocol for more than 1 minute."
+
+  # Database Alerts
+  - name: database
+    interval: 30s
+    rules:
+      - alert: DatabaseConnectionHigh
+        expr: sentient_database_connections_active > 80
+        for: 2m
+        labels:
+          severity: warning
+          category: DATABASE
+        annotations:
+          summary: "High database connection count"
+          description: "Database has {{ $value }} active connections, approaching connection limit."
+
+      - alert: SlowDatabaseQueries
+        expr: histogram_quantile(0.95, rate(sentient_database_query_duration_seconds_bucket[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+          category: DATABASE
+        annotations:
+          summary: "Slow database queries detected"
+          description: "95th percentile of database query duration is {{ $value }} seconds."
+
+      - alert: DatabaseErrors
+        expr: rate(sentient_database_query_errors_total[5m]) > 0.01
+        for: 1m
+        labels:
+          severity: critical
+          category: DATABASE
+        annotations:
+          summary: "Database query errors"
+          description: "Database query error rate is {{ $value }} errors/second."
+
+  # Network Monitoring Alerts
+  - name: network
+    interval: 30s
+    rules:
+      - alert: HighNetworkLatency
+        expr: histogram_quantile(0.95, rate(sentient_http_request_duration_seconds_bucket[5m])) > 2
+        for: 5m
+        labels:
+          severity: warning
+          category: NETWORK
+        annotations:
+          summary: "High network latency detected"
+          description: "95th percentile response time is {{ $value }} seconds."
+
+      - alert: NetworkPacketLoss
+        expr: rate(sentient_network_packet_loss_total[5m]) > 0.01
+        for: 2m
+        labels:
+          severity: warning
+          category: NETWORK
+        annotations:
+          summary: "Network packet loss detected"
+          description: "Network packet loss rate is {{ $value | humanizePercentage }}."
+
+  # Compliance and Audit Alerts
+  - name: compliance
+    interval: 60s
+    rules:
+      - alert: AuditLogMissing
+        expr: rate(sentient_audit_events_total[10m]) == 0
+        for: 10m
+        labels:
+          severity: warning
+          category: COMPLIANCE
+        annotations:
+          summary: "No audit events recorded"
+          description: "No audit events have been recorded for the past 10 minutes, potential logging issue."
+
+      - alert: ComplianceViolation
+        expr: rate(sentient_compliance_violations_total[5m]) > 0
+        for: 0s
+        labels:
+          severity: critical
+          category: COMPLIANCE
+          classification: CONFIDENTIAL
+        annotations:
+          summary: "Compliance violation detected"
+          description: "{{ $labels.regulation }} compliance violation: {{ $labels.violation_type }}."

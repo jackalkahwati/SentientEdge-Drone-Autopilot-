@@ -1,0 +1,367 @@
+version: '3.8'
+
+services:
+  # Frontend - Next.js Application
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+      args:
+        - NODE_ENV=production
+    container_name: sentient-edge-frontend
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - NEXT_PUBLIC_API_URL=https://api.sentientedge.military
+      - NEXT_PUBLIC_WS_URL=wss://api.sentientedge.military/ws
+    ports:
+      - "3000:3000"
+    networks:
+      - sentient-edge-network
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+
+  # Backend - Express API Server
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+      args:
+        - NODE_ENV=production
+    container_name: sentient-edge-backend
+    restart: unless-stopped
+    environment:
+      - NODE_ENV=production
+      - PORT=4000
+      - USE_HTTPS=true
+      - DATABASE_URL=postgresql://sentient_admin:${POSTGRES_PASSWORD}@pgbouncer:5432/sentient_edge
+      - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_REFRESH_SECRET=${JWT_REFRESH_SECRET}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - SSL_CERT_PATH=/app/ssl/server.crt
+      - SSL_KEY_PATH=/app/ssl/server.key
+      - SSL_CA_PATH=/app/ssl/ca.crt
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    ports:
+      - "4000:4000"
+    networks:
+      - sentient-edge-network
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      pgbouncer:
+        condition: service_started
+    volumes:
+      - ./database/ssl:/app/ssl:ro
+      - ./logs:/app/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 2G
+        reservations:
+          cpus: '1.0'
+          memory: 1G
+    security_opt:
+      - no-new-privileges:true
+
+  # Primary PostgreSQL Database
+  postgres-primary:
+    image: postgres:16-alpine
+    container_name: sentient-edge-postgres-primary
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: sentient_edge
+      POSTGRES_USER: sentient_admin
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+      POSTGRES_SSL_MODE: require
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_primary_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+      - ./database/ssl:/var/lib/postgresql/ssl:ro
+      - ./database/backups:/backups
+    command: >
+      postgres
+      -c ssl=on
+      -c ssl_cert_file=/var/lib/postgresql/ssl/server.crt
+      -c ssl_key_file=/var/lib/postgresql/ssl/server.key
+      -c ssl_ca_file=/var/lib/postgresql/ssl/ca.crt
+      -c max_connections=200
+      -c shared_buffers=512MB
+      -c effective_cache_size=2GB
+      -c maintenance_work_mem=128MB
+      -c checkpoint_completion_target=0.7
+      -c wal_buffers=32MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c work_mem=8MB
+      -c min_wal_size=2GB
+      -c max_wal_size=8GB
+      -c log_statement=all
+      -c log_min_duration_statement=100
+      -c log_checkpoints=on
+      -c log_connections=on
+      -c log_disconnections=on
+      -c log_lock_waits=on
+      -c log_temp_files=0
+      -c log_destination=stderr
+      -c logging_collector=on
+    networks:
+      - sentient-edge-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentient_admin -d sentient_edge"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 80s
+    deploy:
+      resources:
+        limits:
+          cpus: '2.0'
+          memory: 4G
+        reservations:
+          cpus: '1.0'
+          memory: 2G
+    security_opt:
+      - no-new-privileges:true
+
+  # Redis for Caching and Session Management
+  redis:
+    image: redis:7-alpine
+    container_name: sentient-edge-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+      - ./database/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: redis-server /usr/local/etc/redis/redis.conf
+    networks:
+      - sentient-edge-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    security_opt:
+      - no-new-privileges:true
+
+  # PgBouncer for Connection Pooling
+  pgbouncer:
+    image: pgbouncer/pgbouncer:latest
+    container_name: sentient-edge-pgbouncer
+    restart: unless-stopped
+    environment:
+      DATABASES_HOST: postgres-primary
+      DATABASES_PORT: 5432
+      DATABASES_USER: sentient_admin
+      DATABASES_PASSWORD: ${POSTGRES_PASSWORD}
+      DATABASES_DBNAME: sentient_edge
+      POOL_MODE: transaction
+      MAX_CLIENT_CONN: 2000
+      DEFAULT_POOL_SIZE: 50
+      MIN_POOL_SIZE: 10
+      RESERVE_POOL_SIZE: 10
+      MAX_DB_CONNECTIONS: 200
+      AUTH_TYPE: scram-sha-256
+    ports:
+      - "6432:5432"
+    depends_on:
+      postgres-primary:
+        condition: service_healthy
+    volumes:
+      - ./database/pgbouncer:/etc/pgbouncer:ro
+    networks:
+      - sentient-edge-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    security_opt:
+      - no-new-privileges:true
+
+  # NGINX Reverse Proxy with SSL Termination
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: sentient-edge-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - ./database/ssl:/etc/nginx/ssl:ro
+      - ./logs/nginx:/var/log/nginx
+    networks:
+      - sentient-edge-network
+    depends_on:
+      - frontend
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    security_opt:
+      - no-new-privileges:true
+
+  # Monitoring - Prometheus
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: sentient-edge-prometheus
+    restart: unless-stopped
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=7d'
+      - '--web.enable-lifecycle'
+    networks:
+      - sentient-edge-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    security_opt:
+      - no-new-privileges:true
+
+  # Monitoring - Grafana
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: sentient-edge-grafana
+    restart: unless-stopped
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SERVER_PROTOCOL=https
+      - GF_SERVER_CERT_FILE=/etc/grafana/ssl/server.crt
+      - GF_SERVER_CERT_KEY=/etc/grafana/ssl/server.key
+    networks:
+      - sentient-edge-network
+    depends_on:
+      - prometheus
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    security_opt:
+      - no-new-privileges:true
+
+  # Log Aggregation - Fluentd
+  fluentd:
+    build:
+      context: ./logging/
+      dockerfile: Dockerfile.fluentd
+    container_name: sentient-edge-fluentd
+    restart: unless-stopped
+    volumes:
+      - ./logs:/fluentd/log
+      - ./logging/fluent.conf:/fluentd/etc/fluent.conf:ro
+    ports:
+      - "24224:24224"
+      - "24224:24224/udp"
+    networks:
+      - sentient-edge-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  postgres_primary_data:
+    driver: local
+  redis_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  sentient-edge-network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
+          gateway: 172.20.0.1
+    driver_opts:
+      com.docker.network.bridge.name: sentient-bridge
+      com.docker.network.bridge.enable_ip_masquerade: "true"
+      com.docker.network.bridge.enable_icc: "true"
+      com.docker.network.bridge.host_binding_ipv4: "0.0.0.0"

@@ -1,0 +1,172 @@
+version: '3.8'
+
+services:
+  # Elasticsearch - Search and Analytics Engine
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
+    container_name: sentient-elasticsearch
+    environment:
+      - node.name=elasticsearch
+      - cluster.name=sentient-edge-cluster
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms2g -Xmx2g"
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=false
+      - xpack.security.transport.ssl.enabled=false
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:-SentientEdge2024!}
+      - xpack.monitoring.collection.enabled=true
+      - action.destructive_requires_name=false
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    mem_limit: 4g
+    volumes:
+      - elasticsearch_data:/usr/share/elasticsearch/data
+      - ./elk-stack/elasticsearch/config/elasticsearch.yml:/usr/share/elasticsearch/config/elasticsearch.yml:ro
+      - ./elk-stack/elasticsearch/config/jvm.options:/usr/share/elasticsearch/config/jvm.options:ro
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    networks:
+      - sentient-monitoring
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Logstash - Data Processing Pipeline
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.11.0
+    container_name: sentient-logstash
+    environment:
+      - "LS_JAVA_OPTS=-Xms1g -Xmx1g"
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:-SentientEdge2024!}
+    volumes:
+      - ./elk-stack/logstash/config/logstash.yml:/usr/share/logstash/config/logstash.yml:ro
+      - ./elk-stack/logstash/pipeline:/usr/share/logstash/pipeline:ro
+      - ../logs:/var/log/sentient-edge:ro
+    ports:
+      - "5044:5044"  # Beats input
+      - "5000:5000"  # TCP input for logs
+      - "9600:9600"  # Logstash monitoring
+    networks:
+      - sentient-monitoring
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9600 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Kibana - Data Visualization and Exploration
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.11.0
+    container_name: sentient-kibana
+    environment:
+      - SERVERNAME=kibana
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTICSEARCH_USERNAME=elastic
+      - ELASTICSEARCH_PASSWORD=${ELASTIC_PASSWORD:-SentientEdge2024!}
+      - KIBANA_SYSTEM_PASSWORD=${KIBANA_PASSWORD:-SentientEdge2024!}
+      - xpack.security.enabled=true
+      - xpack.encryptedSavedObjects.encryptionKey=${KIBANA_ENCRYPTION_KEY:-a7s8d9f0g1h2j3k4l5m6n7o8p9q0r1s2}
+    volumes:
+      - ./elk-stack/kibana/config/kibana.yml:/usr/share/kibana/config/kibana.yml:ro
+      - kibana_data:/usr/share/kibana/data
+    ports:
+      - "5601:5601"
+    networks:
+      - sentient-monitoring
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5601/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # Filebeat - Log Shipper
+  filebeat:
+    image: docker.elastic.co/beats/filebeat:8.11.0
+    container_name: sentient-filebeat
+    user: root
+    environment:
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:-SentientEdge2024!}
+    volumes:
+      - ./elk-stack/filebeat/config/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+      - ../logs:/var/log/sentient-edge:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - filebeat_data:/usr/share/filebeat/data
+    networks:
+      - sentient-monitoring
+    depends_on:
+      logstash:
+        condition: service_healthy
+    command: ["--strict.perms=false"]
+
+  # Metricbeat - System and Service Metrics
+  metricbeat:
+    image: docker.elastic.co/beats/metricbeat:8.11.0
+    container_name: sentient-metricbeat
+    user: root
+    environment:
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:-SentientEdge2024!}
+    volumes:
+      - ./elk-stack/metricbeat/config/metricbeat.yml:/usr/share/metricbeat/metricbeat.yml:ro
+      - /proc:/hostfs/proc:ro
+      - /sys/fs/cgroup:/hostfs/sys/fs/cgroup:ro
+      - /:/hostfs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - metricbeat_data:/usr/share/metricbeat/data
+    networks:
+      - sentient-monitoring
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    command: ["--strict.perms=false", "-system.hostfs=/hostfs"]
+
+  # APM Server - Application Performance Monitoring
+  apm-server:
+    image: docker.elastic.co/apm/apm-server:8.11.0
+    container_name: sentient-apm-server
+    environment:
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:-SentientEdge2024!}
+    volumes:
+      - ./elk-stack/apm-server/config/apm-server.yml:/usr/share/apm-server/apm-server.yml:ro
+    ports:
+      - "8200:8200"
+    networks:
+      - sentient-monitoring
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8200/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  elasticsearch_data:
+    driver: local
+  kibana_data:
+    driver: local
+  filebeat_data:
+    driver: local
+  metricbeat_data:
+    driver: local
+
+networks:
+  sentient-monitoring:
+    driver: bridge
+    name: sentient-monitoring

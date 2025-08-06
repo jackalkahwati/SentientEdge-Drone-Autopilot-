@@ -1,0 +1,82 @@
+# Grafana Dashboard Provisioning Configuration
+# Military-grade dashboard management for SentientEdge
+
+apiVersion: 1
+
+providers:
+  # System Health Dashboards
+  - name: 'System Health'
+    orgId: 1
+    folder: 'System Monitoring'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards/system
+
+  # Drone Operations Dashboards
+  - name: 'Drone Operations'
+    orgId: 1
+    folder: 'Drone Monitoring'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards/drone
+
+  # Security Monitoring Dashboards
+  - name: 'Security Monitoring'
+    orgId: 1
+    folder: 'Security'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards/security
+
+  # Mission Management Dashboards
+  - name: 'Mission Management'
+    orgId: 1
+    folder: 'Mission Control'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards/mission
+
+  # Infrastructure Monitoring
+  - name: 'Infrastructure'
+    orgId: 1
+    folder: 'Infrastructure'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards/infrastructure
+
+  # Application Performance Monitoring
+  - name: 'Application Performance'
+    orgId: 1
+    folder: 'APM'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards/apm
+
+  # Compliance and Audit
+  - name: 'Compliance'
+    orgId: 1
+    folder: 'Compliance & Audit'
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    allowUiUpdates: true
+    options:
+      path: /var/lib/grafana/dashboards/compliance

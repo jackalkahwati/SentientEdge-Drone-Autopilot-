@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Values.namespace }}
+  labels:
+    name: {{ .Values.namespace }}
+    tier: drone-control
+    security-level: military-grade
+    environment: {{ .Values.environment }}
+    {{- include "sentient-edge.labels" . | nindent 4 }}
+  annotations:
+    description: "SentientEdge Drone Control Platform - Military-Grade Security"
+    classification: "UNCLASSIFIED//FOR OFFICIAL USE ONLY"
+    helm.sh/resource-policy: keep
