@@ -1,20 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(find:*)",
-      "Bash(npm install:*)",
-      "Bash(touch:*)",
-      "Bash(cp:*)",
-      "Bash(npm run dev:backend:*)",
-      "Bash(node server.js)",
-      "Bash(timeout:*)",
-      "Bash(node:*)",
-      "Bash(DEBUG=*)",
-      "Bash(mkdir:*)",
-      "Bash(chmod:*)",
-      "Bash(openssl rand:*)",
-      "Bash(vercel:*)",
-      "Bash(git add:*)"
+      "Bash(for file in lib/ardupilot-integration.ts lib/audit.ts lib/certificate-manager.ts lib/cyphal-protocol.ts lib/enhanced-mavlink-server.ts lib/mavlink-server.ts lib/secure-cyphal.ts lib/secure-websocket.ts)",
+      "Bash(do mv \"$file\" \"$file%.ts.server.ts\")",
+      "Bash(done)"
     ],
     "deny": []
   }
