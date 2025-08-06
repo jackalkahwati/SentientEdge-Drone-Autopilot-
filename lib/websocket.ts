@@ -1,10 +1,8 @@
 // Secure Real-time WebSocket connection handler with military-grade encryption
 
-import { 
-  SecureWebSocketService, 
-  SecureConnection 
-} from './secure-websocket';
-import { SecurityLevel } from './military-crypto';
+// Import types only - server implementation is in secure-websocket.server.ts
+type SecureConnection = any;
+type SecurityLevel = 'HIGH' | 'MEDIUM' | 'LOW';
 
 type MessageCallback = (data: any) => void;
 type StatusCallback = (status: 'connected' | 'disconnected' | 'reconnecting' | 'error') => void;
@@ -18,14 +16,13 @@ class WebSocketService {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private reconnectInterval = 3000; // 3 seconds
-  private secureWebSocketService: SecureWebSocketService;
-  private useSecureConnection: boolean = true;
+  private useSecureConnection: boolean = false; // Disabled for browser compatibility
 
   constructor(url: string) {
     // Convert HTTP URLs to HTTPS and WS to WSS for security
     this.url = this.ensureSecureURL(url);
-    this.secureWebSocketService = new SecureWebSocketService();
-    this.setupSecureWebSocketHandlers();
+    // Secure WebSocket service is server-only
+    // this.setupSecureWebSocketHandlers();
   }
 
   // Ensure URL uses secure protocols
@@ -39,33 +36,9 @@ class WebSocketService {
     return url;
   }
 
-  // Set up secure WebSocket event handlers
+  // Secure WebSocket handlers removed for browser compatibility
   private setupSecureWebSocketHandlers(): void {
-    this.secureWebSocketService.on('connection_established', (event) => {
-      console.log('Secure WebSocket connection established:', event);
-      this.notifyStatusChange('connected');
-    });
-
-    this.secureWebSocketService.on('connection_closed', (event) => {
-      console.log('Secure WebSocket connection closed:', event);
-      this.notifyStatusChange('disconnected');
-      this.attemptReconnect();
-    });
-
-    this.secureWebSocketService.on('connection_error', (event) => {
-      console.error('Secure WebSocket connection error:', event);
-      this.notifyStatusChange('error');
-    });
-
-    this.secureWebSocketService.on('secure_message_received', (event) => {
-      // Handle encrypted messages
-      this.handleSecureMessage(event);
-    });
-
-    this.secureWebSocketService.on('message_received', (event) => {
-      // Handle unencrypted messages (for backward compatibility)
-      this.handleMessage(event);
-    });
+    // Server-only functionality - disabled for browser
   }
 
   // Handle secure encrypted messages

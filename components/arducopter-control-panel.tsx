@@ -43,7 +43,7 @@ import {
   CopterParameterCategory, 
   CopterTelemetry 
 } from '@/lib/arducopter-integration';
-import { useSITL, SITLVehicleType } from '@/lib/arducopter-sitl';
+import { SITLVehicleType, SITLManagerClient } from '@/lib/arducopter-sitl-browser';
 
 interface ArduCopterControlPanelProps {
   systemId?: number;
@@ -52,7 +52,7 @@ interface ArduCopterControlPanelProps {
 
 export function ArduCopterControlPanel({ systemId = 1, className = '' }: ArduCopterControlPanelProps) {
   const arducopter = useArduCopter();
-  const sitl = useSITL();
+  const sitl = new SITLManagerClient();
   
   const [telemetryData, setTelemetryData] = useState<CopterTelemetry[]>([]);
   const [selectedCopter, setSelectedCopter] = useState<CopterTelemetry | null>(null);
