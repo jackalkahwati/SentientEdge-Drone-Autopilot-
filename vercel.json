@@ -2,23 +2,5 @@
   "buildCommand": "npm run build",
   "outputDirectory": ".next",
   "framework": "nextjs",
-  "installCommand": "npm install",
-  "env": {
-    "NEXT_PUBLIC_API_URL": "/api",
-    "NEXT_PUBLIC_WS_URL": "/api/ws",
-    "NEXT_PUBLIC_MAPBOX_TOKEN": "@mapbox_token",
-    "JWT_SECRET": "@jwt_secret",
-    "DEMO_MODE": "true"
-  },
-  "functions": {
-    "api/drones.js": {
-      "maxDuration": 10
-    },
-    "api/missions.js": {
-      "maxDuration": 10
-    },
-    "api/auth.js": {
-      "maxDuration": 10
-    }
-  }
+  "installCommand": "npm install"
 }
