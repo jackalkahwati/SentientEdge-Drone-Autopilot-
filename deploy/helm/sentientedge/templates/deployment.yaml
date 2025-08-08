@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "sentientedge.fullname" . }}
+  labels:
+    app.kubernetes.io/name: {{ include "sentientedge.name" . }}
+    app.kubernetes.io/instance: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "sentientedge.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "sentientedge.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+    spec:
+      containers:
+        - name: app
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 3000
+          env:
+            - name: APP_VERSION
+              value: {{ .Values.env.APP_VERSION | quote }}
+            - name: NEXT_PUBLIC_ENABLE_REALTIME
+              value: {{ .Values.env.NEXT_PUBLIC_ENABLE_REALTIME | quote }}
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "sentientedge.fullname" . }}-secrets
+                  key: DATABASE_URL
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+

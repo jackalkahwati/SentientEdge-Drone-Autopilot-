@@ -1,0 +1,19 @@
+{
+  "buildCommand": "pnpm build",
+  "outputDirectory": ".next",
+  "framework": "nextjs",
+  "installCommand": "pnpm install --frozen-lockfile",
+  "git": {
+    "deploymentEnabled": {
+      "main": true,
+      "dev": false,
+      "feature/*": false
+    }
+  },
+  "github": {
+    "enabled": true,
+    "autoAlias": false,
+    "silent": true,
+    "autoJobCancelation": true
+  }
+}

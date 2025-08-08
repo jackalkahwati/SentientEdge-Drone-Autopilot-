@@ -1,0 +1,311 @@
+# Istio Service Mesh Configuration for SentientEdge
+# Military-grade secure service mesh with mTLS and advanced security policies
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: istio-system
+  labels:
+    istio-injection: disabled
+    name: istio-system
+    security-level: military-grade
+
+---
+# Istio Control Plane Configuration
+apiVersion: install.istio.io/v1alpha1
+kind: IstioOperator
+metadata:
+  name: sentient-edge-control-plane
+  namespace: istio-system
+spec:
+  # Use the minimal profile as base and customize
+  profile: minimal
+  
+  # Global mesh configuration
+  meshConfig:
+    # Enable automatic mTLS
+    defaultConfig:
+      proxyStatsMatcher:
+        inclusionRegexps:
+        - ".*outlier_detection.*"
+        - ".*circuit_breaker.*"
+        - ".*upstream_rq_retry.*"
+        - ".*upstream_rq_pending.*"
+        - ".*_cx_.*"
+      holdApplicationUntilProxyStarts: true
+      
+    # Security settings
+    trustDomain: "sentient-edge.military"
+    
+    # Access logging
+    accessLogFile: "/dev/stdout"
+    accessLogFormat: |
+      {
+        "timestamp": "%START_TIME%",
+        "method": "%REQ(:METHOD)%",
+        "url": "%REQ(X-ENVOY-ORIGINAL-PATH?:PATH)%",
+        "protocol": "%PROTOCOL%",
+        "response_code": "%RESPONSE_CODE%",
+        "response_flags": "%RESPONSE_FLAGS%",
+        "bytes_received": "%BYTES_RECEIVED%",
+        "bytes_sent": "%BYTES_SENT%",
+        "duration": "%DURATION%",
+        "upstream_service_time": "%RESP(X-ENVOY-UPSTREAM-SERVICE-TIME)%",
+        "x_forwarded_for": "%REQ(X-FORWARDED-FOR)%",
+        "user_agent": "%REQ(USER-AGENT)%",
+        "request_id": "%REQ(X-REQUEST-ID)%",
+        "authority": "%REQ(:AUTHORITY)%",
+        "upstream_host": "%UPSTREAM_HOST%",
+        "source_app": "%REQ(X-SOURCE-APP)%",
+        "source_ip": "%REQ(X-REAL-IP)%"
+      }
+    
+    # Enable tracing
+    defaultProviders:
+      tracing:
+        - jaeger
+      metrics:
+        - prometheus
+    
+    extensionProviders:
+    - name: jaeger
+      envoyOtelAls:
+        service: jaeger-collector.istio-system.svc.cluster.local
+        port: 14250
+    
+    # Outbound traffic policy - restrict to registered services only
+    outboundTrafficPolicy:
+      mode: REGISTRY_ONLY
+
+  # Component configuration
+  components:
+    pilot:
+      k8s:
+        env:
+        - name: PILOT_ENABLE_WORKLOAD_ENTRY_AUTOREGISTRATION
+          value: "true"
+        - name: PILOT_ENABLE_CROSS_DOMAIN_PROXY
+          value: "false"
+        - name: PILOT_TRACE_SAMPLING
+          value: "1.0"
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 2Gi
+          limits:
+            cpu: 2000m
+            memory: 4Gi
+        hpaSpec:
+          minReplicas: 2
+          maxReplicas: 10
+          metrics:
+          - type: Resource
+            resource:
+              name: cpu
+              target:
+                type: Utilization
+                averageUtilization: 80
+        
+    ingressGateways:
+    - name: istio-ingressgateway
+      enabled: true
+      k8s:
+        service:
+          type: LoadBalancer
+          ports:
+          - name: status-port
+            port: 15021
+            protocol: TCP
+            targetPort: 15021
+          - name: http2
+            port: 80
+            protocol: TCP
+            targetPort: 8080
+          - name: https
+            port: 443
+            protocol: TCP
+            targetPort: 8443
+          - name: tcp-websocket
+            port: 8080
+            protocol: TCP
+            targetPort: 8080
+        resources:
+          requests:
+            cpu: 1000m
+            memory: 1Gi
+          limits:
+            cpu: 2000m
+            memory: 2Gi
+        hpaSpec:
+          minReplicas: 3
+          maxReplicas: 10
+          metrics:
+          - type: Resource
+            resource:
+              name: cpu
+              target:
+                type: Utilization
+                averageUtilization: 80
+        
+  # Security-focused values
+  values:
+    global:
+      # Military-grade security mesh
+      meshID: "sentient-edge-mesh"
+      network: "sentient-edge-network"
+      
+      # Proxy configuration
+      proxy:
+        # Resource limits for security
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        
+        # Security settings
+        privileged: false
+        readOnlyRootFilesystem: true
+        runAsNonRoot: true
+        runAsUser: 1337
+        runAsGroup: 1337
+        
+        # Logging level for security monitoring
+        logLevel: "info"
+        componentLogLevel: "misc:error"
+
+---
+# Gateway for external traffic
+apiVersion: networking.istio.io/v1beta1
+kind: Gateway
+metadata:
+  name: sentient-edge-gateway
+  namespace: istio-system
+spec:
+  selector:
+    istio: ingressgateway
+  servers:
+  # HTTPS traffic
+  - port:
+      number: 443
+      name: https
+      protocol: HTTPS
+    tls:
+      mode: SIMPLE
+      credentialName: sentient-edge-tls-secret
+    hosts:
+    - "sentientedge.military"
+    - "api.sentientedge.military"
+    - "*.sentientedge.military"
+  # HTTP redirect to HTTPS
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "sentientedge.military"
+    - "api.sentientedge.military"
+    - "*.sentientedge.military"
+    tls:
+      httpsRedirect: true
+
+---
+# Default destination rule for mTLS
+apiVersion: networking.istio.io/v1beta1
+kind: DestinationRule
+metadata:
+  name: default-mtls
+  namespace: istio-system
+spec:
+  host: "*.local"
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
+  exportTo:
+  - "*"
+
+---
+# Peer Authentication - Enable strict mTLS
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default-strict-mtls
+  namespace: istio-system
+spec:
+  mtls:
+    mode: STRICT
+
+---
+# Authorization Policy - Default deny all
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: default-deny-all
+  namespace: istio-system
+spec:
+  # No rules means deny all - this will be overridden by specific policies
+
+---
+# Service Monitor for Prometheus scraping
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: istio-mesh-metrics
+  namespace: istio-system
+  labels:
+    app: istiod
+spec:
+  selector:
+    matchLabels:
+      app: istiod
+  endpoints:
+  - port: http-monitoring
+    interval: 15s
+    path: /stats/prometheus
+
+---
+# Network Policy for Istio system components
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: istio-system-network-policy
+  namespace: istio-system
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  # Allow ingress gateway traffic
+  - from:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 15021
+    - protocol: TCP
+      port: 8080
+    - protocol: TCP
+      port: 8443
+  # Allow istiod webhook traffic
+  - from:
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 15017
+  egress:
+  # Allow DNS
+  - to: []
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # Allow Kubernetes API
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 443
+    - protocol: TCP
+      port: 6443

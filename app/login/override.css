@@ -1,0 +1,44 @@
+/* Critical overrides for login page to ensure dark theme */
+
+/* Force all backgrounds to be transparent or dark */
+.login-container *[class*="bg-white"],
+.login-container *[class*="bg-gray"],
+.login-container *[class*="bg-slate"],
+.login-container *[class*="bg-zinc"],
+.login-container .bg-background,
+.login-container .bg-card {
+  background-color: transparent !important;
+}
+
+/* Force all text to be light colored */
+.login-container *[class*="text-black"],
+.login-container *[class*="text-gray"],
+.login-container *[class*="text-slate"],
+.login-container .text-foreground,
+.login-container .text-card-foreground {
+  color: inherit !important;
+}
+
+/* Override button styles */
+.login-container button[type="submit"] {
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%) !important;
+  color: white !important;
+}
+
+/* Override input styles */
+.login-container input {
+  background-color: rgba(39, 39, 42, 0.5) !important;
+  border-color: rgba(63, 63, 70, 0.5) !important;
+  color: white !important;
+}
+
+.login-container input:focus {
+  background-color: rgba(39, 39, 42, 1) !important;
+  border-color: #3b82f6 !important;
+}
+
+/* Override card styles */
+.login-container > div > div > div[class*="rounded"] {
+  background-color: rgba(24, 24, 27, 0.8) !important;
+  border-color: rgba(63, 63, 70, 0.3) !important;
+}
